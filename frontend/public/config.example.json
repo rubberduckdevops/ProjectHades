@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://localhost:3000/api",
+  "region": "us-west-2",
+  "userPoolId": "us-west-2_XXXXXXXXX",
+  "userPoolClientId": "XXXXXXXXXXXXXXXXXXXXXXXXXX"
+}
