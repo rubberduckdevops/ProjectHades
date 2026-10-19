@@ -19,12 +19,13 @@ Shared by `backend/` (Rust/Axum on Lambda), `frontend/` (React + Cloudscape) and
 - `pk` (S) = `JOURNAL#<sub>`
 - `sk` (S) = ISO-8601 UTC timestamp with millis, e.g. `2026-10-19T14:03:22.123Z`.
 - `body` (S) holds the entry text.
+- `project` (S, optional) holds the free-text project. It's absent for general entries, including every entry saved before projects existed.
 
 ## Entry shape
 ```json
-{ "id": "2026-10-19T14:03:22.123Z", "timestamp": "2026-10-19T14:03:22.123Z", "body": "text" }
+{ "id": "2026-10-19T14:03:22.123Z", "timestamp": "2026-10-19T14:03:22.123Z", "project": "hades", "body": "text" }
 ```
-`id` and `timestamp` both equal the sort key.
+`id` and `timestamp` both equal the sort key. `project` is always present, and is `null` for a general entry.
 
 ## Endpoints
 ### `GET /api/journal?from=<ISO>&to=<ISO>`
@@ -39,12 +40,14 @@ Shared by `backend/` (Rust/Axum on Lambda), `frontend/` (React + Cloudscape) and
 - An unparseable timestamp gets `400`.
 
 ### `PUT /api/journal`: upsert
-Body: `{ "body": "text", "id"?: "<RFC3339 timestamp>" }`
+Body: `{ "body": "text", "project"?: "text", "id"?: "<RFC3339 timestamp>" }`
 - With no `id`, it inserts a new entry with `sk = now` and returns `201 entry`.
 - With an `id`, it must parse as RFC 3339 (otherwise `400`). The id is normalized to `sk` format and the backend calls `PutItem` at that key.
   - Returns `200 entry` if an existing item was replaced.
   - Returns `201 entry` if the item is new.
 - `body` must be non-empty after trimming and at most 10 KB. Otherwise `400`.
+- `project` is optional free text. It's trimmed, and a blank or missing value means a general entry (`null`). It can be at most 100 bytes. Otherwise `400`.
+- An upsert by `id` replaces the whole entry, so leaving out `project` clears it.
 - `pk` always comes from the token. Clients can never pick the user.
 
 ## Errors

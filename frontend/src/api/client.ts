@@ -4,6 +4,8 @@ import { getConfig } from '../config'
 export interface JournalEntry {
   id: string
   timestamp: string
+  /** Free-text project; null for a general entry. */
+  project: string | null
   body: string
 }
 
@@ -56,7 +58,7 @@ export function listJournal(from: string, to: string): Promise<JournalEntry[]> {
   )
 }
 
-export function upsertJournal(input: { body: string; id?: string }): Promise<JournalEntry> {
+export function upsertJournal(input: { body: string; project?: string; id?: string }): Promise<JournalEntry> {
   return request<JournalEntry>('/journal', {
     method: 'PUT',
     body: JSON.stringify(input),

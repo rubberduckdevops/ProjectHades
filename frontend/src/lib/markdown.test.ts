@@ -12,11 +12,11 @@ describe('escapeTableCell', () => {
 })
 
 describe('journalToMarkdown', () => {
-  it('renders a heading and a Time | Entry table in the given timezone', () => {
+  it('renders a Time | Project | Entry table in the given timezone, blank project for general entries', () => {
     const md = journalToMarkdown(
       [
-        { id: 'a', timestamp: '2026-10-19T16:14:00.000Z', body: 'Started the backend' },
-        { id: 'b', timestamp: '2026-10-19T19:02:30.000Z', body: 'Lunch | then review\nsecond line' },
+        { id: 'a', timestamp: '2026-10-19T16:14:00.000Z', project: 'hades', body: 'Started the backend' },
+        { id: 'b', timestamp: '2026-10-19T19:02:30.000Z', project: null, body: 'Lunch | then review\nsecond line' },
       ],
       new Date('2026-10-19T20:00:00Z'),
       'America/Los_Angeles',
@@ -25,10 +25,10 @@ describe('journalToMarkdown', () => {
       [
         '## Journal — Monday, October 19, 2026',
         '',
-        '| Time | Entry |',
-        '| --- | --- |',
-        '| 09:14:00 | Started the backend |',
-        '| 12:02:30 | Lunch \\| then review<br>second line |',
+        '| Time | Project | Entry |',
+        '| --- | --- | --- |',
+        '| 09:14:00 | hades | Started the backend |',
+        '| 12:02:30 |  | Lunch \\| then review<br>second line |',
         '',
       ].join('\n'),
     )

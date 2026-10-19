@@ -35,6 +35,24 @@ pub fn validate_body(body: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Maximum project name size in bytes.
+pub const MAX_PROJECT_BYTES: usize = 100;
+
+/// Trim the project; blank means "no project" (a general entry).
+pub fn normalize_project(project: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(p) = project else { return Ok(None) };
+    let p = p.trim();
+    if p.is_empty() {
+        return Ok(None);
+    }
+    if p.len() > MAX_PROJECT_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "project must be at most {MAX_PROJECT_BYTES} bytes"
+        )));
+    }
+    Ok(Some(p.to_owned()))
+}
+
 fn normalize_or_400(value: &str, what: &str) -> Result<String, ApiError> {
     normalize_timestamp(value)
         .ok_or_else(|| ApiError::bad_request(format!("{what} must be an RFC 3339 timestamp")))
@@ -93,6 +111,7 @@ pub async fn put_journal_entry(
 ) -> Result<(StatusCode, Json<JournalEntry>), ApiError> {
     let Json(input) = input.map_err(|e| ApiError::bad_request(e.body_text()))?;
     validate_body(&input.body)?;
+    let project = normalize_project(input.project)?;
     let sk = input
         .id
         .as_deref()
@@ -102,11 +121,15 @@ pub async fn put_journal_entry(
     let repo = JournalRepo::new(&state.ddb, &state.table_name);
     match sk {
         None => {
-            let entry = repo.put_new(&user.sub, &input.body).await?;
+            let entry = repo
+                .put_new(&user.sub, project.as_deref(), &input.body)
+                .await?;
             Ok((StatusCode::CREATED, Json(entry)))
         }
         Some(sk) => {
-            let (entry, created) = repo.upsert(&user.sub, &sk, &input.body).await?;
+            let (entry, created) = repo
+                .upsert(&user.sub, &sk, project.as_deref(), &input.body)
+                .await?;
             let status = if created {
                 StatusCode::CREATED
             } else {
@@ -131,6 +154,22 @@ mod tests {
         assert!(validate_body(&"a".repeat(MAX_BODY_BYTES + 1)).is_err());
         // Limit is in bytes: 3-byte chars.
         assert!(validate_body(&"€".repeat(MAX_BODY_BYTES / 3 + 1)).is_err());
+    }
+
+    #[test]
+    fn project_normalization() {
+        assert_eq!(normalize_project(None).unwrap(), None);
+        assert_eq!(normalize_project(Some("".into())).unwrap(), None);
+        assert_eq!(normalize_project(Some("  \t ".into())).unwrap(), None);
+        assert_eq!(
+            normalize_project(Some("  hades ".into())).unwrap(),
+            Some("hades".to_owned())
+        );
+        assert!(normalize_project(Some("p".repeat(MAX_PROJECT_BYTES))).is_ok());
+        assert!(matches!(
+            normalize_project(Some("p".repeat(MAX_PROJECT_BYTES + 1))),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]

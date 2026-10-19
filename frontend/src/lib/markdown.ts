@@ -12,14 +12,17 @@ export function escapeTableCell(text: string): string {
     .join('<br>')
 }
 
-/** Render a day's entries as a Markdown heading plus a Time | Entry table. */
+/** Render a day's entries as a Markdown heading plus a Time | Project | Entry table. */
 export function journalToMarkdown(entries: JournalEntry[], day: Date, timeZone: string): string {
   const lines = [
     `## Journal — ${formatLongDate(day, timeZone)}`,
     '',
-    '| Time | Entry |',
-    '| --- | --- |',
-    ...entries.map((e) => `| ${formatTime(e.timestamp, timeZone)} | ${escapeTableCell(e.body)} |`),
+    '| Time | Project | Entry |',
+    '| --- | --- | --- |',
+    ...entries.map(
+      (e) =>
+        `| ${formatTime(e.timestamp, timeZone)} | ${escapeTableCell(e.project ?? '')} | ${escapeTableCell(e.body)} |`,
+    ),
   ]
   return lines.join('\n') + '\n'
 }

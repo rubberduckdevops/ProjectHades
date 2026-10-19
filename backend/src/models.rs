@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct CreateOrUpdateJournalEntry {
     pub body: String,
     #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
     pub id: Option<String>,
 }
 
@@ -13,14 +15,17 @@ pub struct CreateOrUpdateJournalEntry {
 pub struct JournalEntry {
     pub id: String,
     pub timestamp: String,
+    /// Free-text project; `None` means a general entry.
+    pub project: Option<String>,
     pub body: String,
 }
 
 impl JournalEntry {
-    pub fn new(sk: String, body: String) -> Self {
+    pub fn new(sk: String, project: Option<String>, body: String) -> Self {
         Self {
             id: sk.clone(),
             timestamp: sk,
+            project,
             body,
         }
     }

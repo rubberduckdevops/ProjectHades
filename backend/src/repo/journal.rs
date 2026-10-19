@@ -59,17 +59,31 @@ impl<'a> JournalRepo<'a> {
         Self { client, table }
     }
 
-    fn item(sub: &str, sk: &str, body: &str) -> HashMap<String, AttributeValue> {
-        HashMap::from([
+    fn item(
+        sub: &str,
+        sk: &str,
+        project: Option<&str>,
+        body: &str,
+    ) -> HashMap<String, AttributeValue> {
+        let mut item = HashMap::from([
             ("pk".to_owned(), AttributeValue::S(pk_for(sub))),
             ("sk".to_owned(), AttributeValue::S(sk.to_owned())),
             ("body".to_owned(), AttributeValue::S(body.to_owned())),
-        ])
+        ]);
+        if let Some(p) = project {
+            item.insert("project".to_owned(), AttributeValue::S(p.to_owned()));
+        }
+        item
     }
 
     /// Insert a new entry at `now`. Never overwrites: on a sort-key collision it retries
     /// once with a fresh timestamp.
-    pub async fn put_new(&self, sub: &str, body: &str) -> Result<JournalEntry, ApiError> {
+    pub async fn put_new(
+        &self,
+        sub: &str,
+        project: Option<&str>,
+        body: &str,
+    ) -> Result<JournalEntry, ApiError> {
         let mut attempt = 0;
         loop {
             let sk = format_sk(Utc::now());
@@ -77,12 +91,18 @@ impl<'a> JournalRepo<'a> {
                 .client
                 .put_item()
                 .table_name(self.table)
-                .set_item(Some(Self::item(sub, &sk, body)))
+                .set_item(Some(Self::item(sub, &sk, project, body)))
                 .condition_expression("attribute_not_exists(sk)")
                 .send()
                 .await;
             match res {
-                Ok(_) => return Ok(JournalEntry::new(sk, body.to_owned())),
+                Ok(_) => {
+                    return Ok(JournalEntry::new(
+                        sk,
+                        project.map(str::to_owned),
+                        body.to_owned(),
+                    ));
+                }
                 Err(e)
                     if attempt == 0
                         && e.as_service_error()
@@ -108,13 +128,14 @@ impl<'a> JournalRepo<'a> {
         &self,
         sub: &str,
         sk: &str,
+        project: Option<&str>,
         body: &str,
     ) -> Result<(JournalEntry, bool), ApiError> {
         let out = self
             .client
             .put_item()
             .table_name(self.table)
-            .set_item(Some(Self::item(sub, sk, body)))
+            .set_item(Some(Self::item(sub, sk, project, body)))
             .return_values(ReturnValue::AllOld)
             .send()
             .await
@@ -125,7 +146,10 @@ impl<'a> JournalRepo<'a> {
                 ))
             })?;
         let created = out.attributes().is_none_or(|a| a.is_empty());
-        Ok((JournalEntry::new(sk.to_owned(), body.to_owned()), created))
+        Ok((
+            JournalEntry::new(sk.to_owned(), project.map(str::to_owned), body.to_owned()),
+            created,
+        ))
     }
 
     /// All entries with `from <= sk <= to`, ascending. Bounds must already be normalized.
@@ -194,7 +218,9 @@ fn entry_from_item(item: &HashMap<String, AttributeValue>) -> Result<JournalEntr
             .cloned()
             .ok_or_else(|| ApiError::internal(format!("item missing string attribute {name}")))
     };
-    Ok(JournalEntry::new(s("sk")?, s("body")?))
+    // Optional: entries saved before projects existed have no `project` attribute.
+    let project = item.get("project").and_then(|v| v.as_s().ok()).cloned();
+    Ok(JournalEntry::new(s("sk")?, project, s("body")?))
 }
 
 #[cfg(test)]
@@ -264,11 +290,21 @@ mod tests {
 
     #[test]
     fn entry_from_item_reads_sk_and_body() {
-        let item = JournalRepo::item("u", "2026-10-19T14:03:22.123Z", "hi");
+        let item = JournalRepo::item("u", "2026-10-19T14:03:22.123Z", None, "hi");
         let e = entry_from_item(&item).unwrap();
         assert_eq!(e.id, "2026-10-19T14:03:22.123Z");
         assert_eq!(e.timestamp, e.id);
         assert_eq!(e.body, "hi");
+        assert_eq!(e.project, None);
+        assert!(!item.contains_key("project"));
         assert_eq!(item["pk"].as_s().unwrap(), "JOURNAL#u");
+    }
+
+    #[test]
+    fn entry_from_item_reads_optional_project() {
+        let item = JournalRepo::item("u", "2026-10-19T14:03:22.123Z", Some("hades"), "hi");
+        assert_eq!(item["project"].as_s().unwrap(), "hades");
+        let e = entry_from_item(&item).unwrap();
+        assert_eq!(e.project.as_deref(), Some("hades"));
     }
 }

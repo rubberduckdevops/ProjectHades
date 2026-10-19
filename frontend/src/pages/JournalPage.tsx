@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Autosuggest from '@cloudscape-design/components/autosuggest'
 import Box from '@cloudscape-design/components/box'
 import Button from '@cloudscape-design/components/button'
 import Container from '@cloudscape-design/components/container'
@@ -6,17 +7,23 @@ import CopyToClipboard from '@cloudscape-design/components/copy-to-clipboard'
 import ContentLayout from '@cloudscape-design/components/content-layout'
 import Flashbar, { type FlashbarProps } from '@cloudscape-design/components/flashbar'
 import Form from '@cloudscape-design/components/form'
+import FormField from '@cloudscape-design/components/form-field'
 import Header from '@cloudscape-design/components/header'
 import SpaceBetween from '@cloudscape-design/components/space-between'
 import Table from '@cloudscape-design/components/table'
-import Textarea from '@cloudscape-design/components/textarea'
+import Textarea, { type TextareaProps } from '@cloudscape-design/components/textarea'
 import { listJournal, upsertJournal, type JournalEntry } from '../api/client'
 import { formatLongDate, formatTime, todayRange } from '../lib/dates'
 import { journalToMarkdown } from '../lib/markdown'
+import { absorbProjects, loadRecentProjects, rememberProject } from '../lib/projects'
 import { useSettings } from '../settings-store'
 
 function sortByTimestamp(entries: JournalEntry[]): JournalEntry[] {
   return [...entries].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+}
+
+function projectsIn(entries: JournalEntry[]): string[] {
+  return entries.flatMap((e) => (e.project ? [e.project] : []))
 }
 
 function errorMessage(err: unknown): string {
@@ -27,6 +34,9 @@ export default function JournalPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [input, setInput] = useState('')
+  const [project, setProject] = useState('')
+  const [recentProjects, setRecentProjects] = useState(loadRecentProjects)
+  const bodyRef = useRef<TextareaProps.Ref>(null)
   const [submitting, setSubmitting] = useState(false)
   const [flash, setFlash] = useState<FlashbarProps.MessageDefinition[]>([])
   const flashId = useRef(0)
@@ -56,6 +66,7 @@ export default function JournalPage() {
       const { from, to } = todayRange(new Date(), timeZone)
       const result = await listJournal(from, to)
       setEntries(sortByTimestamp(result))
+      setRecentProjects(absorbProjects(projectsIn(result)))
     } catch (err) {
       pushError('Failed to load entries', err)
     } finally {
@@ -68,7 +79,10 @@ export default function JournalPage() {
     const { from, to } = todayRange(new Date(), timeZone)
     listJournal(from, to)
       .then((result) => {
-        if (!cancelled) setEntries(sortByTimestamp(result))
+        if (!cancelled) {
+          setEntries(sortByTimestamp(result))
+          setRecentProjects(absorbProjects(projectsIn(result)))
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) pushError('Failed to load entries', err)
@@ -89,6 +103,8 @@ export default function JournalPage() {
     void fetchEntries()
   }
 
+  const projectOptions = useMemo(() => recentProjects.map((value) => ({ value })), [recentProjects])
+
   const trimmed = input.trim()
   const canSubmit = trimmed.length > 0 && !submitting
 
@@ -96,9 +112,13 @@ export default function JournalPage() {
     if (!canSubmit) return
     setSubmitting(true)
     try {
-      const entry = await upsertJournal({ body: trimmed })
+      const projectName = project.trim()
+      // undefined is dropped by JSON.stringify, so a blank project is simply omitted.
+      const entry = await upsertJournal({ body: trimmed, project: projectName || undefined })
       setEntries((prev) => sortByTimestamp([...prev.filter((e) => e.id !== entry.id), entry]))
+      if (entry.project) setRecentProjects(rememberProject(entry.project))
       setInput('')
+      setProject('')
     } catch (err) {
       pushError('Failed to add entry', err)
     } finally {
@@ -123,6 +143,12 @@ export default function JournalPage() {
               header: 'Time',
               cell: (item) => formatTime(item.timestamp, timeZone),
               width: 120,
+            },
+            {
+              id: 'project',
+              header: 'Project',
+              cell: (item) => item.project ?? <Box color="text-status-inactive">General</Box>,
+              width: 160,
             },
             {
               id: 'body',
@@ -172,20 +198,39 @@ export default function JournalPage() {
             }
           >
             <Container header={<Header variant="h2">New entry</Header>}>
-              <Textarea
-                value={input}
-                onChange={({ detail }) => setInput(detail.value)}
-                onKeyDown={(event) => {
-                  if (event.detail.key === 'Enter' && !event.detail.shiftKey) {
-                    event.preventDefault()
-                    void submit()
-                  }
-                }}
-                placeholder="What's on your mind?"
-                rows={3}
-                disabled={submitting}
-                ariaLabel="New journal entry"
-              />
+              <SpaceBetween size="s">
+                <FormField label="Project" description="Optional. Leave blank for a general entry.">
+                  <Autosuggest
+                    value={project}
+                    onChange={({ detail }) => setProject(detail.value)}
+                    onSelect={() => bodyRef.current?.focus()}
+                    onKeyDown={({ detail }) => {
+                      if (detail.key === 'Enter') bodyRef.current?.focus()
+                    }}
+                    options={projectOptions}
+                    enteredTextLabel={(value) => `Use "${value}"`}
+                    placeholder="General"
+                    empty="No recent projects"
+                    disabled={submitting}
+                    ariaLabel="Project"
+                  />
+                </FormField>
+                <Textarea
+                  ref={bodyRef}
+                  value={input}
+                  onChange={({ detail }) => setInput(detail.value)}
+                  onKeyDown={(event) => {
+                    if (event.detail.key === 'Enter' && !event.detail.shiftKey) {
+                      event.preventDefault()
+                      void submit()
+                    }
+                  }}
+                  placeholder="What's on your mind?"
+                  rows={3}
+                  disabled={submitting}
+                  ariaLabel="New journal entry"
+                />
+              </SpaceBetween>
             </Container>
           </Form>
         </form>

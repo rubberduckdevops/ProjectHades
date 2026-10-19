@@ -221,10 +221,13 @@ mod tests {
     #[tokio::test]
     async fn put_with_bad_body_is_400() {
         let too_big = format!(r#"{{"body":"{}"}}"#, "a".repeat(10 * 1024 + 1));
+        let long_project = format!(r#"{{"body":"ok","project":"{}"}}"#, "p".repeat(101));
         for body in [
             r#"{"body":"   "}"#,
             r#"{"body":""}"#,
             too_big.as_str(),
+            long_project.as_str(),
+            r#"{"body":"ok","project":42}"#,
             r#"{"body":"ok","id":"not-a-time"}"#,
             r#"{"nobody":"x"}"#,
             "not json",
