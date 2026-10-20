@@ -51,6 +51,30 @@ export class HadesStack extends Stack {
       authFlows: { userSrp: true, userPassword: true },
     });
 
+    // ---- Notes bucket -----------------------------------------------------
+    // Note content lives at users/<sub>/notes/<path>. This bucket is the source
+    // of truth for notes, so it is versioned and retained on stack deletion
+    // (no autoDeleteObjects).
+    const notesBucket = new s3.Bucket(this, 'NotesBucket', {
+      versioned: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+      lifecycleRules: [
+        {
+          id: 'NotesVersionHygiene',
+          enabled: true,
+          noncurrentVersionExpiration: Duration.days(90),
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+    // Phase 2: S3 event notifications (ObjectCreated/ObjectRemoved on
+    // users/*/notes/*) -> SQS queue + DLQ -> indexer Lambda, plus the S3 Vectors
+    // bucket and index, go here.
+
     // ---- Lambda (Rust / Axum) -------------------------------------------
     const fn = new RustFunction(this, 'ApiFunction', {
       manifestPath: path.join(__dirname, '../../backend/Cargo.toml'),
@@ -59,12 +83,20 @@ export class HadesStack extends Stack {
       timeout: Duration.seconds(10),
       environment: {
         TABLE_NAME: table.tableName,
+        NOTES_BUCKET: notesBucket.bucketName,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
         // AWS_REGION is set automatically by the Lambda runtime.
       },
     });
+    // Includes PutItem/UpdateItem/DeleteItem/ConditionCheckItem, which is what
+    // TransactWriteItems (notes move) is authorized against.
     table.grantReadWriteData(fn);
+    // Object actions scoped to users/*: s3:GetObject* (incl. GetObjectVersion),
+    // s3:PutObject, s3:DeleteObject* (incl. DeleteObjectVersion), s3:Abort*;
+    // bucket-level s3:List* / s3:GetBucket* on the bucket ARN. CopyObject needs
+    // GetObject on the source + PutObject on the destination, both covered.
+    notesBucket.grantReadWrite(fn, 'users/*');
 
     // ---- HTTP API -------------------------------------------------------
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
@@ -85,7 +117,7 @@ export class HadesStack extends Stack {
       autoDeleteObjects: true,
     });
 
-    // SPA fallback: rewrite extension-less paths to /index.html. Attached to
+    // SPA fallback: rewrite every non-file path to /index.html. Attached to
     // the S3 (default) behavior only so API 404s are not masked.
     const spaRewrite = new cloudfront.Function(this, 'SpaRewriteFunction', {
       runtime: cloudfront.FunctionRuntime.JS_2_0,
@@ -93,8 +125,12 @@ export class HadesStack extends Stack {
 function handler(event) {
   var request = event.request;
   var uri = request.uri;
-  var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
-  if (lastSegment.indexOf('.') === -1) {
+  // Real files: Vite build output under /assets/, and top-level files such as
+  // /config.json or /favicon.svg. Everything else is an SPA route, including
+  // note URLs like /notes/Projects/Design.md that end in a file extension.
+  var isAsset = uri.indexOf('/assets/') === 0;
+  var isRootFile = uri.lastIndexOf('/') === 0 && uri.indexOf('.') !== -1;
+  if (!isAsset && !isRootFile) {
     request.uri = '/index.html';
   }
   return request;
@@ -158,6 +194,7 @@ function handler(event) {
     });
     new CfnOutput(this, 'HttpApiUrl', { value: httpApi.apiEndpoint });
     new CfnOutput(this, 'TableName', { value: table.tableName });
+    new CfnOutput(this, 'NotesBucketName', { value: notesBucket.bucketName });
     new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
     new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
     new CfnOutput(this, 'Region', { value: this.region });

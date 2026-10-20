@@ -9,6 +9,7 @@ pub const DEFAULT_PORT: u16 = 3000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub table_name: String,
+    pub notes_bucket: String,
     pub user_pool_id: String,
     pub client_id: String,
     pub region: String,
@@ -47,6 +48,7 @@ impl Config {
         let required = |k: &'static str| get(k).ok_or(ConfigError::Missing(k));
 
         let table_name = required("TABLE_NAME")?;
+        let notes_bucket = required("NOTES_BUCKET")?;
         let user_pool_id = required("COGNITO_USER_POOL_ID")?;
         let client_id = required("COGNITO_CLIENT_ID")?;
         let region = get("AWS_REGION").unwrap_or_else(|| DEFAULT_REGION.to_owned());
@@ -71,6 +73,7 @@ impl Config {
 
         Ok(Config {
             table_name,
+            notes_bucket,
             user_pool_id,
             client_id,
             region,
@@ -93,8 +96,9 @@ mod tests {
         Config::from_lookup(|k| m.get(k).cloned())
     }
 
-    const REQUIRED: [(&str, &str); 3] = [
+    const REQUIRED: [(&str, &str); 4] = [
         ("TABLE_NAME", "hades_journal"),
+        ("NOTES_BUCKET", "hades-notes-bucket"),
         ("COGNITO_USER_POOL_ID", "us-west-2_abc"),
         ("COGNITO_CLIENT_ID", "client123"),
     ];
@@ -102,6 +106,8 @@ mod tests {
     #[test]
     fn defaults_applied() {
         let c = load(&REQUIRED).unwrap();
+        assert_eq!(c.table_name, "hades_journal");
+        assert_eq!(c.notes_bucket, "hades-notes-bucket");
         assert_eq!(c.region, "us-west-2");
         assert_eq!(c.cors_origins, vec!["http://localhost:5173"]);
         assert_eq!(c.port, 3000);
@@ -109,8 +115,27 @@ mod tests {
 
     #[test]
     fn missing_required_fails() {
-        let err = load(&REQUIRED[..2]).unwrap_err();
+        let err = load(&REQUIRED[..3]).unwrap_err();
         assert_eq!(err, ConfigError::Missing("COGNITO_CLIENT_ID"));
+    }
+
+    #[test]
+    fn notes_bucket_is_required() {
+        let pairs: Vec<_> = REQUIRED
+            .iter()
+            .copied()
+            .filter(|(k, _)| *k != "NOTES_BUCKET")
+            .collect();
+        assert_eq!(
+            load(&pairs).unwrap_err(),
+            ConfigError::Missing("NOTES_BUCKET")
+        );
+        let mut blank = pairs.clone();
+        blank.push(("NOTES_BUCKET", "  "));
+        assert_eq!(
+            load(&blank).unwrap_err(),
+            ConfigError::Missing("NOTES_BUCKET")
+        );
     }
 
     #[test]

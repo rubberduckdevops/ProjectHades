@@ -108,3 +108,17 @@ export function formatLongDate(date: Date, timeZone: string = browserTimeZone())
   })
 }
 
+
+/** Short date and time, e.g. "Oct 19, 2026, 3:00 PM", in `timeZone`. */
+export function formatDateTime(iso: string, timeZone: string = browserTimeZone()): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString(undefined, {
+    timeZone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}

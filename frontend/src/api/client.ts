@@ -32,23 +32,45 @@ export async function getAccessTokenInfo(forceRefresh = false): Promise<AccessTo
   return { token: accessToken.toString(), expiresAt: exp * 1000 }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/** An HTTP error from the API. `currentHash` is set on notes 409s when the note exists. */
+export class ApiError extends Error {
+  readonly status: number
+  readonly currentHash?: string
+
+  constructor(status: number, message: string, currentHash?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.currentHash = currentHash
+  }
+}
+
+/**
+ * Authenticated JSON request against the configured API base.
+ * Resolves to `undefined` for 204 responses. Throws ApiError for non-2xx.
+ */
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getAccessToken()
   const headers = new Headers(init.headers)
   headers.set('Authorization', `Bearer ${token}`)
-  headers.set('Content-Type', 'application/json')
+  if (init.body !== undefined && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
 
   const res = await fetch(`${getConfig().apiUrl}${path}`, { ...init, headers })
   if (!res.ok) {
     let message = `Request failed (HTTP ${res.status})`
+    let currentHash: string | undefined
     try {
-      const data = (await res.json()) as { error?: unknown }
+      const data = (await res.json()) as { error?: unknown; currentHash?: unknown }
       if (typeof data?.error === 'string' && data.error) message = data.error
+      if (typeof data?.currentHash === 'string' && data.currentHash) currentHash = data.currentHash
     } catch {
       // non-JSON error body; keep default message
     }
-    throw new Error(message)
+    throw new ApiError(res.status, message, currentHash)
   }
+  if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatTime, todayRange } from './dates'
+import { formatDateTime, formatTime, todayRange } from './dates'
 
 describe('todayRange', () => {
   it('returns from < to as ISO strings', () => {
@@ -69,5 +69,20 @@ describe('timezone-aware helpers', () => {
   it('formats times in the given timezone', () => {
     expect(formatTime('2026-10-19T03:30:05.000Z', 'America/Los_Angeles')).toBe('20:30:05')
     expect(formatTime('2026-10-19T03:30:05.000Z', 'UTC')).toBe('03:30:05')
+  })
+})
+
+describe('formatDateTime', () => {
+  it('formats in the given timezone', () => {
+    const la = formatDateTime('2026-10-19T03:30:05.000Z', 'America/Los_Angeles')
+    const utc = formatDateTime('2026-10-19T03:30:05.000Z', 'UTC')
+    expect(la).toContain('18')
+    expect(la).toContain('2026')
+    expect(utc).toContain('19')
+    expect(la).not.toBe(utc)
+  })
+
+  it('returns the input for invalid dates', () => {
+    expect(formatDateTime('nope', 'UTC')).toBe('nope')
   })
 })

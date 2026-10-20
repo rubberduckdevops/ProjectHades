@@ -3,11 +3,12 @@
 The `HadesStack` deploys these resources (default region `us-west-2`, or set `CDK_DEFAULT_REGION`):
 
 - **DynamoDB** table `hades_journal` with `pk`/`sk` strings, on-demand billing and PITR. The table is retained when the stack is deleted.
+- **S3 notes bucket** (CDK-generated name) holding note content at `users/<sub>/notes/<path>`. It is versioned, SSE-S3 encrypted, has all public access blocked and enforces SSL. Lifecycle rules expire noncurrent versions after 90 days, remove expired object delete markers and abort incomplete multipart uploads after 7 days. The bucket is retained when the stack is deleted.
 - **Cognito** user pool with email sign-in and no self sign-up. It has a public web client that allows SRP and USER_PASSWORD auth.
-- **Lambda**, built from `../backend` (Rust, arm64, `provided.al2023`) with `cargo-lambda`.
+- **Lambda**, built from `../backend` (Rust, arm64, `provided.al2023`) with `cargo-lambda`. It gets `TABLE_NAME`, `NOTES_BUCKET` and the Cognito IDs as env vars, read/write access to the table, and read/write/delete (including versioned get and delete) on `users/*` in the notes bucket.
 - **API Gateway HTTP API**, with a `$default` route to the Lambda. Auth is enforced in the app.
 - **S3 + CloudFront** for the SPA:
-  - `/*` is served from S3 through OAC. A CloudFront Function rewrites extension-less paths to `/index.html`.
+  - `/*` is served from S3 through OAC. A CloudFront Function serves `/assets/*` and top-level files (`/config.json`, `/favicon.svg`) as-is and rewrites every other path to `/index.html`, including note URLs such as `/notes/Projects/Design.md`.
   - `/api/*` is proxied to the HTTP API with no caching.
 - `config.json` is written into the site bucket at deploy time: `{ apiUrl: "/api", region, userPoolId, userPoolClientId }`.
 
@@ -41,7 +42,7 @@ cd ../infra && npx cdk deploy
 
 `npx cdk synth` builds the Rust Lambda with cargo-lambda. The first build takes several minutes.
 
-The stack outputs are `CloudFrontUrl`, `HttpApiUrl`, `TableName`, `UserPoolId`, `UserPoolClientId` and `Region`. To fetch them later:
+The stack outputs are `CloudFrontUrl`, `HttpApiUrl`, `TableName`, `NotesBucketName`, `UserPoolId`, `UserPoolClientId` and `Region`. To fetch them later:
 
 ```sh
 aws cloudformation describe-stacks --stack-name HadesStack \
@@ -87,13 +88,14 @@ The backend needs the **access** token, not the ID token.
 
 ## Local development
 
-Local development runs against the deployed DynamoDB table and Cognito pool, using your local AWS credentials.
+Local development runs against the deployed DynamoDB table, notes bucket and Cognito pool, using your local AWS credentials.
 
 Backend (listens on `http://localhost:3000`, routes under `/api`):
 
 ```sh
 export AWS_REGION=us-west-2
 export TABLE_NAME=hades_journal
+export NOTES_BUCKET=<NotesBucketName output>
 export COGNITO_USER_POOL_ID=<UserPoolId output>
 export COGNITO_CLIENT_ID=<UserPoolClientId output>
 export CORS_ORIGINS=http://localhost:5173   # default
@@ -112,5 +114,5 @@ npm run dev
 
 ## Notes
 
-- The table and user pool use `RemovalPolicy.RETAIN`, so `cdk destroy` leaves them in place. The site bucket is destroyed and emptied.
+- The table, user pool and notes bucket use `RemovalPolicy.RETAIN`, so `cdk destroy` leaves them in place. The notes bucket is the source of truth for note content and is never emptied by CDK. Delete it by hand (including all object versions) if you really want it gone. The site bucket is destroyed and emptied.
 - Never commit `frontend/public/config.json`. In production, the deployed `config.json` from CDK overrides any file with the same name in `dist`.
