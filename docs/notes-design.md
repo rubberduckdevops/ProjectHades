@@ -1,6 +1,6 @@
 # Notes: design
 
-Status: **phase 1 done, phase 2 in progress**. Last updated 2026-10-20.
+Status: **phases 1 and 2 done**. Last updated 2026-10-20.
 
 ## Goals
 - A **Notes** app in Hades: titled Markdown documents organized in folders, created, edited and deleted in the browser.
@@ -84,10 +84,10 @@ This changed from the original plan, which triggered on S3 events. The S3 object
 5. Embed each chunk with Bedrock `amazon.titan-embed-text-v2:0` at **1024 dimensions, normalized**. Then `PutVectors` with:
    - Key: `<sub>#<path>#<n>`.
    - Filterable metadata: `sub`, `path`, `project`.
-   - Non-filterable metadata: `heading`, `snippet` (the first about 300 characters of the chunk), `updatedAt`.
+   - Non-filterable metadata: `heading`, `snippet` (the first about 300 characters of the chunk), `title`, `updatedAt`.
 6. Delete stale vectors: keys `#<n>` at or above the new chunk count, or all of them on delete. Write `chunkCount` and `indexedHash` back under the condition `contentHash = <indexed hash>`, so a note edited mid-index is never marked as indexed.
 
-**Vector index:** one S3 Vectors bucket with one index `notes`: `float32`, dimension 1024, `cosine`, and `heading` / `snippet` / `updatedAt` declared non-filterable. Both are created in CDK (`aws_s3vectors.CfnVectorBucket` and `CfnIndex`).
+**Vector index:** one S3 Vectors bucket with one index `notes`: `float32`, dimension 1024, `cosine`, and `heading` / `snippet` / `title` / `updatedAt` declared non-filterable. Both are created in CDK (`aws_s3vectors.CfnVectorBucket` and `CfnIndex`).
 
 ## Search (phase 2)
 `GET /api/search?q=…&project=…&limit=10`:

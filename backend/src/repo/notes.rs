@@ -4,6 +4,10 @@
 //! `tags` (L of S, optional), `contentHash` (S), `s3VersionId` (S), `size` (N),
 //! `createdAt` (S), `updatedAt` (S). See "Notes (phase 1)" in API_CONTRACT.md.
 //!
+//! Phase 2 adds `indexedHash` (S) and `chunkCount` (N), written **only by the indexer**. The
+//! API never writes them: create and move write fresh items without them, and update uses
+//! `UpdateItem SET` on other attributes only, so they survive edits (and `indexed` turns false).
+//!
 //! Conflict responses carry `currentHash`, obtained from the failed conditional write itself
 //! (`ReturnValuesOnConditionCheckFailure = ALL_OLD`), so no extra read is needed.
 
@@ -33,6 +37,9 @@ use crate::{
 
 pub const PK_PREFIX: &str = "NOTE#";
 pub const CONTENT_TYPE: &str = "text/markdown; charset=utf-8";
+/// Indexer-owned attributes.
+pub const ATTR_INDEXED_HASH: &str = "indexedHash";
+pub const ATTR_CHUNK_COUNT: &str = "chunkCount";
 
 const MSG_NOT_FOUND: &str = "note not found";
 const MSG_EXISTS: &str = "note already exists";
@@ -44,14 +51,35 @@ pub fn pk_for(sub: &str) -> String {
     format!("{PK_PREFIX}{sub}")
 }
 
-/// A metadata item: the API-facing metadata plus the S3 version it points at.
+/// A metadata item: the API-facing metadata plus the S3 version it points at and the
+/// indexer-owned attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRecord {
     pub meta: NoteMeta,
     pub s3_version_id: String,
+    /// `indexedHash`: the content hash last indexed, if any.
+    pub indexed_hash: Option<String>,
+    /// `chunkCount`: number of vectors stored for the note (0 if absent).
+    pub chunk_count: u32,
 }
 
-/// Build the full DynamoDB item for a note.
+impl NoteRecord {
+    /// A record for a freshly written item (never indexed yet).
+    pub fn fresh(meta: NoteMeta, s3_version_id: String) -> Self {
+        Self {
+            meta: NoteMeta {
+                indexed: false,
+                ..meta
+            },
+            s3_version_id,
+            indexed_hash: None,
+            chunk_count: 0,
+        }
+    }
+}
+
+/// Build the full DynamoDB item for a freshly written note. The indexer-owned attributes
+/// (`indexedHash`, `chunkCount`) are deliberately never written here.
 pub fn note_item(sub: &str, rec: &NoteRecord) -> HashMap<String, AttributeValue> {
     let m = &rec.meta;
     let mut item = HashMap::from([
@@ -90,7 +118,7 @@ fn tags_value(tags: &[String]) -> AttributeValue {
 }
 
 /// Read a metadata item. Optional attributes are read tolerantly: `tags` may be missing, an
-/// `L` (non-string elements skipped) or an `SS`.
+/// `L` (non-string elements skipped) or an `SS`; `indexedHash` / `chunkCount` may be missing.
 pub fn record_from_item(item: &HashMap<String, AttributeValue>) -> Result<NoteRecord, ApiError> {
     let s = |name: &str| {
         item.get(name)
@@ -115,18 +143,31 @@ pub fn record_from_item(item: &HashMap<String, AttributeValue>) -> Result<NoteRe
         Some(AttributeValue::Ss(set)) => set.clone(),
         _ => Vec::new(),
     };
+    let content_hash = s("contentHash")?;
+    let indexed_hash = item
+        .get(ATTR_INDEXED_HASH)
+        .and_then(|v| v.as_s().ok())
+        .cloned();
+    let chunk_count = item
+        .get(ATTR_CHUNK_COUNT)
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0);
     Ok(NoteRecord {
         meta: NoteMeta {
             path: s("sk")?,
             title: s("title")?,
             project,
             tags,
-            content_hash: s("contentHash")?,
+            indexed: indexed_hash.as_deref() == Some(content_hash.as_str()),
+            content_hash,
             size,
             created_at: s("createdAt")?,
             updated_at: s("updatedAt")?,
         },
         s3_version_id: s("s3VersionId")?,
+        indexed_hash,
+        chunk_count,
     })
 }
 
@@ -149,11 +190,21 @@ fn build_meta(path: &str, derived: DerivedMeta, content: &str, hash: String) -> 
         size: content.len() as u64,
         created_at: now.clone(),
         updated_at: now,
+        indexed: false,
     }
 }
 
+/// `SET a, b REMOVE c` from the parts (the API's update never names indexer attributes).
+fn update_expression(set: &[&str], remove: &[&str]) -> String {
+    let mut expr = format!("SET {}", set.join(", "));
+    if !remove.is_empty() {
+        expr.push_str(&format!(" REMOVE {}", remove.join(", ")));
+    }
+    expr
+}
+
 /// Map an AWS SDK error (DynamoDB or S3) to a 500, keeping the full error chain in the log.
-fn aws_err<E: std::error::Error>(op: &str, e: &E) -> ApiError {
+pub(crate) fn aws_err<E: std::error::Error>(op: &str, e: &E) -> ApiError {
     ApiError::internal(format!("{op} failed: {}", DisplayErrorContext(e)))
 }
 
@@ -204,7 +255,7 @@ impl<'a> NotesRepo<'a> {
     }
 
     /// `GetObject` of one exact version, as UTF-8.
-    async fn get_content(&self, key: &str, version_id: &str) -> Result<String, ApiError> {
+    pub async fn get_content(&self, key: &str, version_id: &str) -> Result<String, ApiError> {
         let out = self
             .s3
             .get_object()
@@ -331,10 +382,7 @@ impl<'a> NotesRepo<'a> {
         );
         let key = s3_key(sub, path);
         let version = self.put_content(&key, content).await?;
-        let rec = NoteRecord {
-            meta,
-            s3_version_id: version,
-        };
+        let rec = NoteRecord::fresh(meta, version);
         let res = self
             .ddb
             .put_item()
@@ -427,10 +475,7 @@ impl<'a> NotesRepo<'a> {
             set.push("#tags = :tags");
             req = req.expression_attribute_values(":tags", tags_value(&derived.tags));
         }
-        let mut expr = format!("SET {}", set.join(", "));
-        if !remove.is_empty() {
-            expr.push_str(&format!(" REMOVE {}", remove.join(", ")));
-        }
+        let expr = update_expression(&set, &remove);
 
         let res = req
             .update_expression(expr)
@@ -528,8 +573,8 @@ impl<'a> NotesRepo<'a> {
             }
         };
 
-        let rec = NoteRecord {
-            meta: NoteMeta {
+        let rec = NoteRecord::fresh(
+            NoteMeta {
                 path: to.to_owned(),
                 title: derived.title,
                 project: derived.project,
@@ -538,9 +583,10 @@ impl<'a> NotesRepo<'a> {
                 size: src.meta.size,
                 created_at: src.meta.created_at.clone(),
                 updated_at: format_sk(Utc::now()),
+                indexed: false,
             },
-            s3_version_id: new_version.clone(),
-        };
+            new_version.clone(),
+        );
 
         // 2. Create `to` + delete `from` atomically.
         let put = Put::builder()
@@ -612,8 +658,11 @@ mod tests {
                 size: 1234,
                 created_at: "2026-10-19T14:03:22.123Z".into(),
                 updated_at: "2026-10-19T15:00:00.000Z".into(),
+                indexed: false,
             },
             s3_version_id: "v1".into(),
+            indexed_hash: None,
+            chunk_count: 0,
         }
     }
 
@@ -678,6 +727,46 @@ mod tests {
     }
 
     #[test]
+    fn fresh_items_have_no_indexer_attributes() {
+        let mut rec = sample(Some("p"), &["t"]);
+        rec.indexed_hash = Some("ab".repeat(32));
+        rec.chunk_count = 4;
+        let item = note_item("u", &rec);
+        assert!(!item.contains_key(ATTR_INDEXED_HASH));
+        assert!(!item.contains_key(ATTR_CHUNK_COUNT));
+        let fresh = NoteRecord::fresh(rec.meta.clone(), "v2".into());
+        assert_eq!(fresh.indexed_hash, None);
+        assert_eq!(fresh.chunk_count, 0);
+        assert!(!fresh.meta.indexed);
+    }
+
+    #[test]
+    fn indexed_flag_from_item() {
+        let mut item = note_item("u", &sample(None, &[]));
+        let rec = record_from_item(&item).unwrap();
+        assert!(!rec.meta.indexed);
+        assert_eq!((rec.indexed_hash, rec.chunk_count), (None, 0));
+
+        item.insert(ATTR_INDEXED_HASH.into(), AttributeValue::S("ab".repeat(32)));
+        item.insert(ATTR_CHUNK_COUNT.into(), AttributeValue::N("3".into()));
+        let rec = record_from_item(&item).unwrap();
+        assert!(rec.meta.indexed);
+        assert_eq!(rec.chunk_count, 3);
+
+        item.insert(ATTR_INDEXED_HASH.into(), AttributeValue::S("cd".repeat(32)));
+        let rec = record_from_item(&item).unwrap();
+        assert!(!rec.meta.indexed, "stale index");
+        assert_eq!(rec.indexed_hash, Some("cd".repeat(32)));
+    }
+
+    #[test]
+    fn update_expression_shape() {
+        let e = update_expression(&["#a = :a", "#b = :b"], &["#c"]);
+        assert_eq!(e, "SET #a = :a, #b = :b REMOVE #c");
+        assert_eq!(update_expression(&["#a = :a"], &[]), "SET #a = :a");
+    }
+
+    #[test]
     fn current_hash_from_old_item() {
         let item = note_item("u", &sample(None, &[]));
         assert_eq!(current_hash(Some(&item)), Some("ab".repeat(32)));
@@ -693,7 +782,8 @@ mod tests {
             serde_json::json!({
                 "path": "Projects/Hades/Design.md", "title": "Design", "project": null,
                 "tags": [], "contentHash": "ab".repeat(32), "size": 1234,
-                "createdAt": "2026-10-19T14:03:22.123Z", "updatedAt": "2026-10-19T15:00:00.000Z"
+                "createdAt": "2026-10-19T14:03:22.123Z", "updatedAt": "2026-10-19T15:00:00.000Z",
+                "indexed": false
             })
         );
         let note = Note {

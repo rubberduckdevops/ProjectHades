@@ -114,6 +114,15 @@ pub fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// The content without its frontmatter. Malformed frontmatter is kept (it counts as body, as
+/// in `derive_metadata`).
+pub fn strip_frontmatter(content: &str) -> &str {
+    match split_frontmatter(content) {
+        Some((yaml, body)) if parse_frontmatter(yaml).is_some() => body,
+        _ => content,
+    }
+}
+
 /// Parse frontmatter YAML. Anything that isn't a mapping (or empty) counts as malformed.
 fn parse_frontmatter(yaml: &str) -> Option<serde_norway::Mapping> {
     match serde_norway::from_str::<Value>(yaml).ok()? {
@@ -165,7 +174,7 @@ fn tags_from(v: &Value) -> Vec<String> {
 }
 
 /// Is this line a fenced-code-block delimiter (``` or ~~~, up to 3 spaces of indent)?
-fn fence_marker(line: &str) -> Option<char> {
+pub fn fence_marker(line: &str) -> Option<char> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;
@@ -434,6 +443,14 @@ mod tests {
         assert_eq!(t("---\ntags:\n---\n"), Vec::<String>::new());
         assert_eq!(t("---\ntitle: x\n---\n"), Vec::<String>::new());
         assert_eq!(t("plain"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strips_frontmatter() {
+        assert_eq!(strip_frontmatter("---\ntitle: x\n---\nbody"), "body");
+        assert_eq!(strip_frontmatter("no fm"), "no fm");
+        let bad = "---\ntitle: [unclosed\n---\nbody";
+        assert_eq!(strip_frontmatter(bad), bad);
     }
 
     #[test]

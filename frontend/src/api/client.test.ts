@@ -11,7 +11,7 @@ vi.mock('../config', () => ({
 }))
 
 import { ApiError, request } from './client'
-import { createNote, deleteNote, getNote, listNotes, moveNote, updateNote } from './notes'
+import { createNote, deleteNote, getNote, listNotes, moveNote, searchNotes, searchUrl, updateNote } from './notes'
 
 const fetchMock = vi.fn<typeof fetch>()
 
@@ -125,5 +125,30 @@ describe('notes API', () => {
     expect(lastCall().url).toBe('https://api.test/api/notes/move')
     expect(lastCall().init.method).toBe('POST')
     expect(JSON.parse(lastCall().init.body as string)).toEqual({ from: 'a.md', to: 'b/a.md', baseHash: hash })
+  })
+
+  it('searches with each parameter encoded', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(200, []))
+    await searchNotes('s3 & vectors?')
+    expect(lastCall().url).toBe('https://api.test/api/search?q=s3%20%26%20vectors%3F')
+    expect(lastCall().init.method).toBeUndefined()
+    await searchNotes('design #1', { project: 'Home Lab', limit: 20 })
+    expect(lastCall().url).toBe('https://api.test/api/search?q=design%20%231&project=Home%20Lab&limit=20')
+  })
+
+  it('passes an abort signal through', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(200, []))
+    const controller = new AbortController()
+    await searchNotes('x', {}, controller.signal)
+    expect(lastCall().init.signal).toBe(controller.signal)
+  })
+})
+
+describe('searchUrl', () => {
+  it('omits empty project and absent limit', () => {
+    expect(searchUrl('a')).toBe('/search?q=a')
+    expect(searchUrl('a', { project: '' })).toBe('/search?q=a')
+    expect(searchUrl('a', { project: null, limit: 5 })).toBe('/search?q=a&limit=5')
+    expect(searchUrl('a/b', { project: 'x/y' })).toBe('/search?q=a%2Fb&project=x%2Fy')
   })
 })

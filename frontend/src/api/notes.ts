@@ -11,6 +11,8 @@ export interface NoteMeta {
   size: number
   createdAt: string
   updatedAt: string
+  /** True when the search index reflects the current content (phase 2). */
+  indexed: boolean
 }
 
 export interface Note extends NoteMeta {
@@ -56,4 +58,35 @@ export function moveNote(from: string, to: string, baseHash: string): Promise<No
     method: 'POST',
     body: JSON.stringify({ from, to, baseHash }),
   })
+}
+
+/** One hit from GET /search. Name matches rank first; see API_CONTRACT.md "Notes search". */
+export interface SearchResult {
+  path: string
+  title: string
+  project: string | null
+  updatedAt: string
+  match: 'name' | 'semantic'
+  /** Cosine similarity (1 - distance); null for a name match with no semantic hit. */
+  score: number | null
+  heading: string | null
+  snippet: string | null
+}
+
+export interface SearchOptions {
+  project?: string | null
+  limit?: number
+}
+
+/** Relative URL for GET /search; empty/absent options are omitted. */
+export function searchUrl(q: string, { project, limit }: SearchOptions = {}): string {
+  let url = `/search?q=${encodeURIComponent(q)}`
+  if (project) url += `&project=${encodeURIComponent(project)}`
+  if (limit !== undefined) url += `&limit=${encodeURIComponent(String(limit))}`
+  return url
+}
+
+/** GET /search?q=&project=&limit= */
+export function searchNotes(q: string, options: SearchOptions = {}, signal?: AbortSignal): Promise<SearchResult[]> {
+  return request<SearchResult[]>(searchUrl(q, options), { signal })
 }

@@ -8,6 +8,9 @@ export TABLE_NAME=hades_journal
 export NOTES_BUCKET=xxxxxxxx-notesbucket-xxxxxxxx   # from the CDK stack outputs (versioned bucket)
 export COGNITO_USER_POOL_ID=us-west-2_XXXXXXXXX      # from the CDK stack outputs
 export COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx  # from the CDK stack outputs
+export VECTOR_BUCKET=hades-vectors-xxxxxxxx          # from the CDK stack outputs (S3 Vectors bucket)
+export VECTOR_INDEX=notes
+# export EMBED_MODEL_ID=amazon.titan-embed-text-v2:0  # default
 export CORS_ORIGINS=http://localhost:5173
 export PORT=3000
 export RUST_LOG=info,tower_http=debug
@@ -16,7 +19,7 @@ export RUST_LOG=info,tower_http=debug
 # Notes need a *versioned* bucket: writes fail with 500 if S3 returns no VersionId.
 
 # --- Run ----------------------------------------------------------------------------------
-cargo run
+cargo run --bin backend
 
 # --- Get a Cognito ACCESS token (the app client must allow USER_PASSWORD_AUTH) -----------
 export HADES_USER=me@example.com
@@ -92,3 +95,33 @@ curl -s -X DELETE "$API/notes/Projects/Hades/Design.md?baseHash=$HASH" -H "$AUTH
 aws s3api list-object-versions --bucket "$NOTES_BUCKET" --prefix "users/" --max-items 20
 aws dynamodb query --table-name "$TABLE_NAME" --key-condition-expression 'pk = :pk' \
   --expression-attribute-values '{":pk":{"S":"NOTE#<sub>"}}'
+
+# --- Search (see "Notes search (phase 2)" in ../API_CONTRACT.md) ---------------------------
+# Name matches (title/path) first, then semantic matches. `project` and `limit` (1-50) optional.
+curl -s -G -H "$AUTH" "$API/search" --data-urlencode "q=where do notes live" | jq
+curl -s -G -H "$AUTH" "$API/search" --data-urlencode "q=storage" -d project=hades -d limit=5 | jq
+# Is a note indexed yet? (`indexed` flips to true once the indexer has caught up)
+curl -s -H "$AUTH" "$API/notes" | jq -r '.[] | "\(.indexed)\t\(.path)"'
+
+# --- Indexer ------------------------------------------------------------------------------
+# Backfill: reindex every note whose indexedHash != contentHash. Returns counts.
+INDEXER_FN=xxxxxxxx-IndexerFunction-xxxxxxxx   # from the CDK stack outputs / Lambda console
+aws lambda invoke --region "$AWS_REGION" --function-name "$INDEXER_FN" \
+  --cli-binary-format raw-in-base64-out --payload '{"backfill": true}' /dev/stdout | jq
+
+# Tail the indexer's logs
+aws logs tail "/aws/lambda/$INDEXER_FN" --region "$AWS_REGION" --follow
+
+# Inspect vectors for a note (keys are <sub>#<path>#<n>)
+aws s3vectors list-vectors --vector-bucket-name "$VECTOR_BUCKET" --index-name "$VECTOR_INDEX" \
+  --return-metadata --max-results 10 | jq '.vectors[] | {key, metadata}'
+
+# Run the indexer locally against real AWS (reads the same env vars minus Cognito)
+cargo lambda watch --bin indexer   # then, in another shell:
+cargo lambda invoke indexer --data-ascii '{"backfill": true}'
+
+# --- Tests ----------------------------------------------------------------------------------
+cargo test
+# End-to-end against moto (S3 + DynamoDB; Bedrock/S3 Vectors are faked in-process)
+uvx --from 'moto[server]' moto_server -p 5055 &
+HADES_E2E_ENDPOINT=http://127.0.0.1:5055 cargo test e2e -- --ignored --test-threads=1

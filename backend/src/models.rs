@@ -51,6 +51,8 @@ pub struct NoteMeta {
     pub size: u64,
     pub created_at: String,
     pub updated_at: String,
+    /// Whether the search index reflects the current content (`indexedHash == contentHash`).
+    pub indexed: bool,
 }
 
 /// A note with its content (`GET /api/notes/{path}`).
@@ -91,4 +93,13 @@ pub struct ListNotesQuery {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteNoteQuery {
     pub base_hash: Option<String>,
+}
+
+/// Query string for `GET /api/search`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SearchQuery {
+    pub q: Option<String>,
+    pub project: Option<String>,
+    /// Parsed by the handler so a bad value gets a clear 400.
+    pub limit: Option<String>,
 }

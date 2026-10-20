@@ -1,4 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import Alert from '@cloudscape-design/components/alert'
 import Autosuggest from '@cloudscape-design/components/autosuggest'
 import Badge from '@cloudscape-design/components/badge'
@@ -17,6 +27,7 @@ import KeyValuePairs from '@cloudscape-design/components/key-value-pairs'
 import Modal from '@cloudscape-design/components/modal'
 import SpaceBetween from '@cloudscape-design/components/space-between'
 import Spinner from '@cloudscape-design/components/spinner'
+import StatusIndicator from '@cloudscape-design/components/status-indicator'
 import Tabs from '@cloudscape-design/components/tabs'
 import Textarea from '@cloudscape-design/components/textarea'
 import { fontFamilyMonospace } from '@cloudscape-design/design-tokens'
@@ -313,6 +324,56 @@ function NewNoteEditor() {
 // Existing note
 // ---------------------------------------------------------------------------
 
+const INDEX_POLL_MS = 3000
+const INDEX_POLL_MAX_MS = 60_000
+
+/**
+ * While `meta.indexed === false`, re-check the note's metadata every few seconds (up to a
+ * minute) and flip `indexed` to true once the server reports the *same*
+ * contentHash as indexed. Only `indexed` is updated: editor content and the
+ * base hash are never touched. Stops on unmount, path change or a new hash.
+ */
+function useIndexPolling(path: string, meta: NoteMeta | null, setMeta: Dispatch<SetStateAction<NoteMeta | null>>) {
+  const hash = meta?.contentHash
+  const pending = meta?.indexed === false
+  useEffect(() => {
+    if (!pending || !hash) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = Date.now() + INDEX_POLL_MAX_MS
+    const tick = async () => {
+      try {
+        // Metadata only (no note body): list with the exact path as prefix, then pick that path.
+        const latest = (await listNotes(path)).find((n) => n.path === path)
+        if (!latest) return
+        if (cancelled) return
+        if (latest.indexed && latest.contentHash === hash) {
+          setMeta((m) => (m && m.contentHash === hash ? { ...m, indexed: true } : m))
+          return
+        }
+      } catch {
+        if (cancelled) return
+        // Transient failure: keep trying until the deadline.
+      }
+      if (Date.now() + INDEX_POLL_MS <= deadline) timer = setTimeout(() => void tick(), INDEX_POLL_MS)
+    }
+    timer = setTimeout(() => void tick(), INDEX_POLL_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [path, hash, pending, setMeta])
+}
+
+function IndexStatus({ indexed }: { indexed: boolean | undefined }) {
+  if (indexed === undefined) return <>-</>
+  return indexed ? (
+    <StatusIndicator type="success">Search index up to date</StatusIndicator>
+  ) : (
+    <StatusIndicator type="pending">Indexing… new changes will be searchable shortly</StatusIndicator>
+  )
+}
+
 interface Conflict {
   currentHash?: string
 }
@@ -341,6 +402,7 @@ function ExistingNoteEditor({ path }: { path: string }) {
 
   const dirty = meta !== null && content !== savedContent
   const guard = useUnsavedChangesGuard(dirty)
+  useIndexPolling(path, meta, setMeta)
 
   const applyLoaded = useCallback((note: Note) => {
     setMeta(note)
@@ -571,7 +633,7 @@ function ExistingNoteEditor({ path }: { path: string }) {
           }
         >
           <KeyValuePairs
-            columns={3}
+            columns={4}
             items={[
               { label: 'Path', value: <CopyToClipboard variant="inline" textToCopy={meta.path} copySuccessText="Path copied" copyErrorText="Couldn't copy" /> },
               { label: 'Project', value: meta.project ?? '-' },
@@ -588,6 +650,7 @@ function ExistingNoteEditor({ path }: { path: string }) {
                     '-'
                   ),
               },
+              { label: 'Search index', value: <IndexStatus indexed={meta.indexed} /> },
             ]}
           />
         </Container>

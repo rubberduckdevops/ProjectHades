@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useCollection } from '@cloudscape-design/collection-hooks'
 import Badge from '@cloudscape-design/components/badge'
 import Box from '@cloudscape-design/components/box'
@@ -9,12 +9,15 @@ import Header from '@cloudscape-design/components/header'
 import Link from '@cloudscape-design/components/link'
 import Pagination from '@cloudscape-design/components/pagination'
 import SpaceBetween from '@cloudscape-design/components/space-between'
+import StatusIndicator from '@cloudscape-design/components/status-indicator'
 import Table, { type TableProps } from '@cloudscape-design/components/table'
 import TextFilter from '@cloudscape-design/components/text-filter'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { listNotes, type NoteMeta } from '../api/notes'
+import NotesSearch from '../components/NotesSearch'
 import { formatDateTime } from '../lib/dates'
 import { encodeNotePath, folderOf } from '../lib/notePaths'
+import { projectsOf } from '../lib/search'
 import { useSettings } from '../settings-store'
 
 const PAGE_SIZE = 50
@@ -110,6 +113,7 @@ export default function NotesPage() {
     : []
 
   const total = filteredItemsCount ?? notes.length
+  const projects = useMemo(() => projectsOf(notes), [notes])
 
   return (
     <ContentLayout
@@ -128,6 +132,7 @@ export default function NotesPage() {
     >
       <SpaceBetween size="l">
         {flash.length > 0 && <Flashbar items={flash} />}
+        <NotesSearch projects={projects} />
         <Table
           {...collectionProps}
           variant="container"
@@ -142,15 +147,22 @@ export default function NotesPage() {
               header: 'Title',
               sortingField: 'title',
               cell: (note) => (
-                <Link
-                  href={`/notes/${encodeNotePath(note.path)}`}
-                  onFollow={(e) => {
-                    e.preventDefault()
-                    openNote(note.path)
-                  }}
-                >
-                  {note.title}
-                </Link>
+                <SpaceBetween size="xxxs">
+                  <Link
+                    href={`/notes/${encodeNotePath(note.path)}`}
+                    onFollow={(e) => {
+                      e.preventDefault()
+                      openNote(note.path)
+                    }}
+                  >
+                    {note.title}
+                  </Link>
+                  {note.indexed === false && (
+                    <Box variant="small">
+                      <StatusIndicator type="pending">Indexing…</StatusIndicator>
+                    </Box>
+                  )}
+                </SpaceBetween>
               ),
             },
             {
