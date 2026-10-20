@@ -6,6 +6,7 @@ export interface Application {
 export const applications: Application[] = [
   { text: 'Journal', href: '/journal' },
   { text: 'Notes', href: '/notes' },
+  { text: 'Todos', href: '/todos' },
 ]
 
 /** The application href to highlight for `pathname` (matches the href and anything below it). */

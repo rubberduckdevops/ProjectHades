@@ -9,7 +9,7 @@ Shared by `backend/` (Rust/Axum on Lambda), `frontend/` (React + Cloudscape) and
 - `GET /api/health` is unauthenticated and returns `200 "ok"`.
 
 ## Auth
-- Every `/api/journal*` route requires `Authorization: Bearer <Cognito ACCESS token>`.
+- Every route except `/api/health` (journal, notes, search and todos) requires `Authorization: Bearer <Cognito ACCESS token>`.
 - The backend validates the token against the user pool's JWKS. It checks for RS256, `iss = https://cognito-idp.{region}.amazonaws.com/{userPoolId}`, `exp`, `token_use == "access"` and `client_id == COGNITO_CLIENT_ID`.
 - The userId is the token's `sub`.
 - A missing or invalid token gets `401 {"error": "..."}`.
@@ -202,6 +202,45 @@ An empty note gives 0 chunks: no vectors, but `indexedHash` is still written.
   - `match` is `"name"` or `"semantic"`.
   - `score`, `heading` and `snippet` are `null` for a name match with no semantic hit.
   - For a name match, `snippet` falls back to `null`. The client shows the path instead.
+
+## Todos
+A small task list. Same auth as every other route; the user always comes from the token.
+
+### Storage
+Items live in the existing table:
+- `pk = TODO#<sub>`, `sk = <createdAt>` in the journal's `sk` format (ISO-8601 UTC with millis). The sort key is the todo's `id`.
+- `title` (S), `done` (BOOL), `updatedAt` (S).
+- `project` (S, optional), `due` (S, optional, `YYYY-MM-DD`), `completedAt` (S, optional, set while `done` is true).
+
+### Shape
+```json
+{ "id": "2026-10-20T14:03:22.123Z", "title": "Renew passport", "project": "home", "due": "2026-11-01",
+  "done": false, "createdAt": "2026-10-20T14:03:22.123Z", "completedAt": null, "updatedAt": "2026-10-20T14:03:22.123Z" }
+```
+`id` equals `createdAt`. `project`, `due` and `completedAt` are always present, possibly `null`.
+
+### Validation
+- `title` is trimmed and stored trimmed. It must be non-empty and at most 500 bytes.
+- `project` follows the journal's rules: trimmed, blank means `null`, at most 100 bytes.
+- `due` is a calendar date, `YYYY-MM-DD`. It has no time or timezone: it's the day you picked.
+- Anything else gets `400`.
+
+### Endpoints
+#### `GET /api/todos`
+Returns `200 [Todo]`: every todo, open and done, sorted by `createdAt` ascending. Ordering for display is up to the client.
+
+#### `POST /api/todos`
+Body: `{ "title": "...", "project"?: "...", "due"?: "YYYY-MM-DD" }`. Returns `201 Todo`, with `done: false`.
+
+#### `PATCH /api/todos/{id}`
+Body: any of `{ "title": "...", "project": "..." | null, "due": "YYYY-MM-DD" | null, "done": true | false }`.
+- Fields that are left out are unchanged. `null` (or a blank project) clears `project` or `due`.
+- `done: true` sets `completedAt` to now, unless the todo was already done (the original time is kept). `done: false` clears `completedAt`.
+- `updatedAt` is set to now on every patch.
+- Returns `200 Todo`, `404` if the todo doesn't exist, `400` if `id` isn't a timestamp or a field is invalid.
+
+#### `DELETE /api/todos/{id}`
+Returns `204`, or `404` if the todo doesn't exist.
 
 ## Errors
 All errors are JSON: `{ "error": "message" }` with status 400, 401, 404, 409 or 500. A `409` from the notes routes also includes `currentHash` when the note exists.

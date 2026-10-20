@@ -394,8 +394,8 @@ async fn note_route_method_mismatches() {
 }
 
 #[tokio::test]
-async fn cors_preflight_allows_delete_and_post() {
-    for method in ["DELETE", "POST"] {
+async fn cors_preflight_allows_delete_post_and_patch() {
+    for method in ["DELETE", "POST", "PATCH"] {
         let r = Request::options("/api/notes/a.md")
             .header("origin", "http://localhost:5173")
             .header("access-control-request-method", method)
@@ -405,6 +405,91 @@ async fn cors_preflight_allows_delete_and_post() {
         assert!(status.is_success());
         let allowed = headers["access-control-allow-methods"].to_str().unwrap();
         assert!(allowed.contains(method), "{allowed}");
+    }
+}
+
+// ---- Todos ---------------------------------------------------------------------------------
+
+fn todo_req(method: &str, uri: &str, body: Option<&str>, auth: Option<String>) -> Request<Body> {
+    let mut b = Request::builder().method(method).uri(uri);
+    if let Some(a) = auth {
+        b = b.header("authorization", a);
+    }
+    match body {
+        Some(json) => b
+            .header("content-type", "application/json")
+            .body(Body::from(json.to_owned()))
+            .unwrap(),
+        None => b.body(Body::empty()).unwrap(),
+    }
+}
+
+const TODO_URI: &str = "/api/todos/2026-10-20T14:03:22.123Z";
+
+#[tokio::test]
+async fn todos_require_token() {
+    for req in [
+        todo_req("GET", "/api/todos", None, None),
+        todo_req("POST", "/api/todos", Some(r#"{"title":"x"}"#), None),
+        todo_req("PATCH", TODO_URI, Some(r#"{"done":true}"#), None),
+        todo_req("DELETE", TODO_URI, None, None),
+    ] {
+        assert_eq!(send(req).await.0, StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
+async fn todo_create_validation_is_400() {
+    let long_title = format!(r#"{{"title":"{}"}}"#, "t".repeat(501));
+    for body in [
+        r#"{"title":"  "}"#,
+        r#"{"nottitle":"x"}"#,
+        long_title.as_str(),
+        r#"{"title":"x","due":"next week"}"#,
+        r#"{"title":"x","due":"2026-02-30"}"#,
+        r#"{"title":"x","project":7}"#,
+        "not json",
+    ] {
+        let (status, _, resp) =
+            send(todo_req("POST", "/api/todos", Some(body), Some(bearer()))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body:.40}");
+        assert!(!error_message(&resp).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn todo_patch_and_delete_validation_is_400() {
+    for (method, uri, body) in [
+        ("PATCH", "/api/todos/not-a-time", Some(r#"{"done":true}"#)),
+        ("DELETE", "/api/todos/not-a-time", None),
+        ("PATCH", TODO_URI, Some(r#"{"title":""}"#)),
+        ("PATCH", TODO_URI, Some(r#"{"due":"soon"}"#)),
+        ("PATCH", TODO_URI, Some(r#"{"done":"yes"}"#)),
+    ] {
+        let (status, _, _) = send(todo_req(method, uri, body, Some(bearer()))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {uri} {body:?}");
+    }
+}
+
+#[tokio::test]
+async fn todo_valid_requests_reach_dynamodb() {
+    // The DynamoDB client points at a closed port, so a 500 proves validation passed.
+    for (method, uri, body) in [
+        ("GET", "/api/todos", None),
+        (
+            "POST",
+            "/api/todos",
+            Some(r#"{"title":"x","project":"p","due":"2026-11-01"}"#),
+        ),
+        (
+            "PATCH",
+            TODO_URI,
+            Some(r#"{"project":null,"due":null,"done":true}"#),
+        ),
+        ("DELETE", TODO_URI, None),
+    ] {
+        let (status, _, _) = send(todo_req(method, uri, body, Some(bearer()))).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {uri}");
     }
 }
 

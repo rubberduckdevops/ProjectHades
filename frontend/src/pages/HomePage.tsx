@@ -11,7 +11,8 @@ import { applications } from '../applications'
 /** One-line pitches for each app, keyed by route. Unknown apps just show their name. */
 const APP_BLURBS: Record<string, string> = {
   '/journal': 'A quick, timestamped log of your day. Tag entries with a project, then copy the day out as Markdown.',
-  '/notes': 'Longer-lived Markdown notes in folders, with edit history. Semantic search is on the way.',
+  '/notes': 'Longer-lived Markdown notes in folders, with edit history and search that understands what you meant.',
+  '/todos': 'A short list of things to do, with optional projects and due dates. Tick them off as you go.',
 }
 
 const HOW_IT_WORKS: { title: string; body: string }[] = [
@@ -21,7 +22,7 @@ const HOW_IT_WORKS: { title: string; body: string }[] = [
   },
   {
     title: 'You write',
-    body: 'Journal entries go to DynamoDB, keyed by you and the moment you wrote them. Notes are Markdown files in a versioned S3 bucket.',
+    body: 'Journal entries and todos go to DynamoDB, keyed by you and the moment you wrote them. Notes are Markdown files in a versioned S3 bucket.',
   },
   {
     title: 'It stays yours',
@@ -29,7 +30,7 @@ const HOW_IT_WORKS: { title: string; body: string }[] = [
   },
   {
     title: 'You find it later',
-    body: "Notes will be indexed by meaning, not just keywords, so “that idea about caching” finds the note even if you never wrote “caching”.",
+    body: "Notes are indexed by meaning, not just keywords, so “that idea about caching” finds the note even if you never wrote “caching”.",
   },
 ]
 

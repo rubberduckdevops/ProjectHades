@@ -7,6 +7,7 @@ describe('activeApplicationHref', () => {
     ['/notes/new', '/notes'],
     ['/notes/Projects/Design.md', '/notes'],
     ['/journal', '/journal'],
+    ['/todos', '/todos'],
     ['/notesy', '/notesy'],
     ['/settings', '/settings'],
   ])('%s -> %s', (pathname, expected) => {

@@ -1,6 +1,6 @@
 # Hades
 
-Personal apps platform: **Journal** (timestamped daily log) and **Notes** (Markdown notes with semantic search).
+Personal apps platform: **Journal** (timestamped daily log), **Notes** (Markdown notes with semantic search) and **Todos** (a task list with optional projects and due dates).
 
 | Dir | What |
 |---|---|

@@ -103,3 +103,53 @@ pub struct SearchQuery {
     /// Parsed by the handler so a bad value gets a clear 400.
     pub limit: Option<String>,
 }
+
+/// A todo as returned by the API. `id` equals `created_at` (the sort key).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Todo {
+    pub id: String,
+    pub title: String,
+    /// Always serialized; `None` = no project.
+    pub project: Option<String>,
+    /// Due date as `YYYY-MM-DD`; always serialized.
+    pub due: Option<String>,
+    pub done: bool,
+    pub created_at: String,
+    /// Set while `done` is true; always serialized.
+    pub completed_at: Option<String>,
+    pub updated_at: String,
+}
+
+/// Request body for `POST /api/todos`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateTodo {
+    pub title: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub due: Option<String>,
+}
+
+/// Request body for `PATCH /api/todos/{id}`. The outer `Option` is "field present"; for
+/// `project` and `due` the inner `None` (JSON `null`) clears the field.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PatchTodo {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    pub project: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub due: Option<Option<String>>,
+    #[serde(default)]
+    pub done: Option<bool>,
+}
+
+/// Distinguishes a present `null` (`Some(None)`) from a missing field (`None`, via `default`).
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}

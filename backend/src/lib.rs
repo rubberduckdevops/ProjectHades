@@ -27,7 +27,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, Method, header},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -37,7 +37,7 @@ use tower_http::{
 use crate::{
     auth::JwksVerifier,
     embed::Embedder,
-    handler::{journal, notes as notes_api, search as search_api},
+    handler::{journal, notes as notes_api, search as search_api, todos},
     vectors::VectorStore,
 };
 
@@ -73,6 +73,11 @@ fn build_default_router(state: Arc<AppState>) -> Router {
                 .layer(DefaultBodyLimit::max(notes_api::MAX_REQUEST_BYTES)),
         )
         .route("/search", get(search_api::search))
+        .route("/todos", get(todos::list_todos).post(todos::create_todo))
+        .route(
+            "/todos/{id}",
+            patch(todos::patch_todo).delete(todos::delete_todo),
+        )
         .with_state(state);
 
     Router::new()
@@ -102,6 +107,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             Method::GET,
             Method::PUT,
             Method::POST,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])

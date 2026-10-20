@@ -10,6 +10,7 @@ import JournalPage from './pages/JournalPage'
 import NoteEditorPage from './pages/NoteEditorPage'
 import NotesPage from './pages/NotesPage'
 import SettingsPage from './pages/SettingsPage'
+import TodosPage from './pages/TodosPage'
 import { SettingsProvider } from './settings-context'
 import { useSettings } from './settings-store'
 
@@ -87,6 +88,7 @@ const router = createBrowserRouter([
       { path: '/notes', element: <NotesPage /> },
       { path: '/notes/new', element: <NoteEditorPage mode="new" /> },
       { path: '/notes/*', element: <NoteEditorPage mode="edit" /> },
+      { path: '/todos', element: <TodosPage /> },
       { path: '/settings', element: <SettingsPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],

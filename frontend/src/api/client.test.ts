@@ -12,6 +12,7 @@ vi.mock('../config', () => ({
 
 import { ApiError, request } from './client'
 import { createNote, deleteNote, getNote, listNotes, moveNote, searchNotes, searchUrl, updateNote } from './notes'
+import { createTodo, deleteTodo, listTodos, updateTodo } from './todos'
 
 const fetchMock = vi.fn<typeof fetch>()
 
@@ -150,5 +151,32 @@ describe('searchUrl', () => {
     expect(searchUrl('a', { project: '' })).toBe('/search?q=a')
     expect(searchUrl('a', { project: null, limit: 5 })).toBe('/search?q=a&limit=5')
     expect(searchUrl('a/b', { project: 'x/y' })).toBe('/search?q=a%2Fb&project=x%2Fy')
+  })
+})
+
+describe('todos API', () => {
+  const id = '2026-10-20T14:03:22.123Z'
+
+  it('lists and creates', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(200, []))
+    await listTodos()
+    expect(lastCall().url).toBe('https://api.test/api/todos')
+    await createTodo({ title: 'Renew passport', due: '2026-11-01' })
+    expect(lastCall().init.method).toBe('POST')
+    expect(JSON.parse(lastCall().init.body as string)).toEqual({ title: 'Renew passport', due: '2026-11-01' })
+  })
+
+  it('patches by encoded id, keeping nulls', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}))
+    await updateTodo(id, { done: true, due: null })
+    expect(lastCall().url).toBe('https://api.test/api/todos/2026-10-20T14%3A03%3A22.123Z')
+    expect(lastCall().init.method).toBe('PATCH')
+    expect(JSON.parse(lastCall().init.body as string)).toEqual({ done: true, due: null })
+  })
+
+  it('deletes by id', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await expect(deleteTodo(id)).resolves.toBeUndefined()
+    expect(lastCall().init.method).toBe('DELETE')
   })
 })

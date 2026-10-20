@@ -89,6 +89,12 @@ export function todayRange(now: Date = new Date(), timeZone: string = browserTim
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
+/** `now`'s calendar day in `timeZone` as `YYYY-MM-DD`. */
+export function calendarDate(now: Date = new Date(), timeZone: string = browserTimeZone()): string {
+  const { year, month, day } = zonedParts(now, timeZone)
+  return `${year}-${pad(month)}-${pad(day)}`
+}
+
 /** Format an ISO timestamp as HH:mm:ss in `timeZone` (defaults to the browser's). */
 export function formatTime(iso: string, timeZone: string = browserTimeZone()): string {
   const date = new Date(iso)

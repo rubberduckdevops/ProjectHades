@@ -442,6 +442,104 @@ async fn e2e_journal_still_works() {
     assert_eq!(notes, json!([]));
 }
 
+#[tokio::test]
+#[ignore = "needs HADES_E2E_ENDPOINT (local S3/DynamoDB mock)"]
+async fn e2e_todos_lifecycle() {
+    let env = setup().await;
+    let app = &env.app;
+    let u = "user-1";
+
+    let (s, list) = call(app, u, "GET", "/api/todos", None).await;
+    assert_eq!((s, list), (StatusCode::OK, json!([])));
+
+    let (s, a) = call(
+        app,
+        u,
+        "POST",
+        "/api/todos",
+        Some(json!({ "title": "  Renew passport ", "project": "home", "due": "2026-11-01" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{a}");
+    assert_eq!(a["title"], "Renew passport");
+    assert_eq!(a["project"], "home");
+    assert_eq!(a["due"], "2026-11-01");
+    assert_eq!(a["done"], false);
+    assert_eq!(a["completedAt"], Value::Null);
+    assert_eq!(a["id"], a["createdAt"]);
+    let (s, b) = call(
+        app,
+        u,
+        "POST",
+        "/api/todos",
+        Some(json!({ "title": "Call mom" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!((&b["project"], &b["due"]), (&Value::Null, &Value::Null));
+
+    let a_uri = format!("/api/todos/{}", a["id"].as_str().unwrap());
+
+    // Complete it; completing again keeps the first completion time.
+    let (s, done) = call(app, u, "PATCH", &a_uri, Some(json!({ "done": true }))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    assert_eq!(done["done"], true);
+    let completed_at = done["completedAt"].as_str().unwrap().to_owned();
+    assert_eq!(done["title"], "Renew passport", "untouched fields survive");
+    let (_, again) = call(app, u, "PATCH", &a_uri, Some(json!({ "done": true }))).await;
+    assert_eq!(again["completedAt"], completed_at.as_str());
+
+    // Clear project and due, rename, reopen.
+    let (s, edited) = call(
+        app,
+        u,
+        "PATCH",
+        &a_uri,
+        Some(json!({ "title": "Renew passport (online)", "project": null, "due": null, "done": false })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{edited}");
+    assert_eq!(edited["title"], "Renew passport (online)");
+    assert_eq!(edited["project"], Value::Null);
+    assert_eq!(edited["due"], Value::Null);
+    assert_eq!(edited["done"], false);
+    assert_eq!(edited["completedAt"], Value::Null);
+    assert_eq!(edited["createdAt"], a["createdAt"]);
+
+    // Listed oldest first; other users and other apps see nothing.
+    let (_, list) = call(app, u, "GET", "/api/todos", None).await;
+    let titles: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Renew passport (online)", "Call mom"]);
+    let (_, other) = call(app, "user-2", "GET", "/api/todos", None).await;
+    assert_eq!(other, json!([]));
+    let (s, _) = call(
+        app,
+        "user-2",
+        "PATCH",
+        &a_uri,
+        Some(json!({ "done": true })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "can't touch another user's todo");
+    let (_, journal) = call(app, u, "GET", "/api/journal", None).await;
+    assert_eq!(journal, json!([]));
+
+    // Delete, then it's gone.
+    let (s, _) = call(app, u, "DELETE", &a_uri, None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(app, u, "DELETE", &a_uri, None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = call(app, u, "PATCH", &a_uri, Some(json!({ "done": true }))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (_, list) = call(app, u, "GET", "/api/todos", None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
 async fn count_versions(env: &Env) -> usize {
     env.s3
         .list_object_versions()
