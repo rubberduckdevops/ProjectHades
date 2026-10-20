@@ -1,6 +1,6 @@
 # Notes: design
 
-Status: **phase 1 in progress**. Last updated 2026-10-20.
+Status: **phase 1 done, phase 2 in progress**. Last updated 2026-10-20.
 
 ## Goals
 - A **Notes** app in Hades: titled Markdown documents organized in folders, created, edited and deleted in the browser.
@@ -21,10 +21,11 @@ Browser / hades CLI ──► CloudFront /api/* ──► Hades API (Rust Lambda
                                                 ▼        ▼          │        + QueryVectors
                                      S3 notes bucket  DynamoDB    S3 Vectors index "notes"
                                      (versioned)      NOTE#<sub>        ▲
-                                                │                       │ Put/DeleteVectors
-                              ObjectCreated /   │                       │
-                              ObjectRemoved     ▼                       │
-                                      SQS (+DLQ) ──► Indexer Lambda ──► Bedrock Titan Embed V2
+                                                         │              │ Put/DeleteVectors
+                                       DynamoDB stream   │              │
+                                       (NOTE# items)     ▼              │
+                                                   Indexer Lambda ──► Bedrock Titan Embed V2
+                                                   (failures → SQS DLQ)
 ```
 
 ## Storage
@@ -71,18 +72,20 @@ The authoritative spec is in [`API_CONTRACT.md`](../API_CONTRACT.md), under "Not
 **Concurrency is optimistic:** a write whose `baseHash` no longer matches gets `409` with the current hash, and the editor offers "reload" or "overwrite".
 
 ## Indexing (phase 2)
-**Trigger:** S3 `ObjectCreated:*` and `ObjectRemoved:*` events on `users/*/notes/*` go to an SQS queue. That queue has a dead-letter queue after 5 receives. Because indexing is driven by S3 rather than by the API, it covers every write path: the API, the CLI and future uploads.
+**Trigger:** the table's **DynamoDB stream**, filtered to `NOTE#` items, feeds the indexer. Failed records retry, then go to an SQS dead-letter queue.
+
+This changed from the original plan, which triggered on S3 events. The S3 object is written *before* its metadata, so an S3 event could arrive while the metadata doesn't exist yet. The indexer would skip the note, and no second event would ever come. Stream records fire only after the metadata commits, and they carry the exact `s3VersionId` and `contentHash`. Every write path, including the CLI, goes through the metadata, so nothing is missed.
 
 **Indexer Lambda:** Rust, sharing the backend crate's models. It is a separate binary in the same workspace. For each message:
-1. Parse the key into `(sub, path)`. HEAD the object. If it no longer exists, it was deleted (go to step 6).
-2. Read the metadata. If `indexedHash == contentHash`, there's nothing to do. This makes retries and duplicate events safe.
-3. Fetch the content and strip the frontmatter.
+1. Take `(sub, path)` from the record's key. On REMOVE, go to step 6, using the old image's `chunkCount`.
+2. If the new image has `indexedHash == contentHash`, there's nothing to do. This makes retries, duplicates and the indexer's own write-back safe.
+3. Fetch the exact S3 version (`s3VersionId`) and strip the frontmatter.
 4. Chunk it by heading sections. A section over about 700 tokens is split on paragraphs with about 80 tokens of overlap, and very small sections are merged. Each chunk keeps its heading path, e.g. `Design > Storage`.
 5. Embed each chunk with Bedrock `amazon.titan-embed-text-v2:0` at **1024 dimensions, normalized**. Then `PutVectors` with:
    - Key: `<sub>#<path>#<n>`.
    - Filterable metadata: `sub`, `path`, `project`.
    - Non-filterable metadata: `heading`, `snippet` (the first about 300 characters of the chunk), `updatedAt`.
-6. Delete stale vectors: keys `#<n>` at or above the new chunk count, or all of them on delete. Record `chunkCount` and `indexedHash` on the metadata item.
+6. Delete stale vectors: keys `#<n>` at or above the new chunk count, or all of them on delete. Write `chunkCount` and `indexedHash` back under the condition `contentHash = <indexed hash>`, so a note edited mid-index is never marked as indexed.
 
 **Vector index:** one S3 Vectors bucket with one index `notes`: `float32`, dimension 1024, `cosine`, and `heading` / `snippet` / `updatedAt` declared non-filterable. Both are created in CDK (`aws_s3vectors.CfnVectorBucket` and `CfnIndex`).
 
@@ -131,9 +134,9 @@ A small Rust binary in the backend workspace, so it shares types.
 ## Infrastructure (CDK)
 - **Phase 1:** the notes S3 bucket; a `NOTES_BUCKET` env var on the API Lambda; IAM for object read and write, including versioned get and delete.
 - **Phase 2:**
-  - S3 event notifications to SQS, plus a dead-letter queue.
+  - A DynamoDB stream (`NEW_AND_OLD_IMAGES`) on the table, plus an SQS dead-letter queue for failed records.
   - The S3 Vectors bucket and index.
-  - An indexer Lambda (`RustFunction`, arm64, SQS source, batch size 5, partial batch failure reporting).
+  - An indexer Lambda (`RustFunction` binary `indexer`, arm64, DynamoDB stream source filtered to `NOTE#`, partial batch failure reporting).
   - IAM for `s3vectors:QueryVectors`, `PutVectors` and `DeleteVectors`, and `bedrock:InvokeModel` on Titan V2.
 - Region `us-west-2`. S3 Vectors and Titan Text Embeddings V2 are both available there. Bedrock model access for Titan V2 must be enabled in the account.
 

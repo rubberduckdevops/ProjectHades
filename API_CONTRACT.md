@@ -84,10 +84,12 @@ Frontmatter that fails to parse is ignored (treated as body), never an error.
 ```json
 // NoteMeta
 { "path": "Projects/Hades/Design.md", "title": "Design", "project": "hades", "tags": ["arch"],
-  "contentHash": "<64 hex>", "size": 1234, "createdAt": "2026-10-19T14:03:22.123Z", "updatedAt": "2026-10-19T15:00:00.000Z" }
+  "contentHash": "<64 hex>", "size": 1234, "createdAt": "2026-10-19T14:03:22.123Z", "updatedAt": "2026-10-19T15:00:00.000Z",
+  "indexed": true }
 // Note = NoteMeta + "content"
 ```
-`project` is always present, possibly `null`, and `tags` is always an array.
+- `project` is always present, possibly `null`, and `tags` is always an array.
+- `indexed` (phase 2) is `true` when the search index reflects the current content, meaning the stored `indexedHash` equals `contentHash`. While it's `false`, the note won't appear in semantic search yet, though title and path matches still work.
 
 ### Endpoints
 #### `GET /api/notes?prefix=<folder/>`
@@ -137,6 +139,70 @@ Body: `{ "from": "<path>", "to": "<path>", "baseHash": "<hash>" }`.
 ### Routing note
 `POST /api/notes/move` is a static route. It never conflicts with a note path, because note paths end in `.md`.
 
+## Notes search (phase 2)
+Design: [`docs/notes-design.md`](docs/notes-design.md), sections "Indexing" and "Search".
+
+### Extra metadata attributes
+These are written **only by the indexer**:
+- `indexedHash` (S): the `contentHash` that was last indexed.
+- `chunkCount` (N): the number of vectors stored for the note.
+
+The API's update (`UpdateItem SET …`) must not touch these two, so they survive edits and `indexed` flips to `false` until the indexer catches up. Create and move write fresh items, so neither attribute is present until the note is indexed.
+
+### Indexing pipeline
+- **Trigger:** a DynamoDB stream on the table (`NEW_AND_OLD_IMAGES`) feeds the **indexer** Lambda, filtered to `pk` starting with `NOTE#`. It is *not* triggered by S3 events: the S3 object is written before the metadata, so an S3 event could arrive before the metadata exists.
+- **Reconcile from the record.** For each record, using `sub = pk minus "NOTE#"` and `path = sk`:
+  - **REMOVE:** delete vectors `<sub>#<path>#0 … #<chunkCount-1>`, taking `chunkCount` from the old image, or 0 if it's absent. This also covers the old path after a move.
+  - **INSERT / MODIFY:** if `indexedHash == contentHash` in the new image, there's nothing to do. This includes the indexer's own write-back. Otherwise:
+    1. Get the S3 object at `users/<sub>/notes/<path>` with `VersionId = s3VersionId`, the exact version.
+    2. Chunk it, embed it, and `PutVectors`.
+    3. Delete the vectors `#<new count> … #<old chunkCount-1>`.
+    4. Write back with `UpdateItem SET indexedHash = :h, chunkCount = :n` under the condition `contentHash = :h`. If the condition fails, the note changed meanwhile, and the newer stream record will reindex it, so this is ignored.
+- **Errors:** errors are reported per record (`ReportBatchItemFailures`), the stream retries, and records go to an SQS dead-letter queue after 3 attempts.
+- **Backfill:** invoking the indexer directly with `{"backfill": true}` reindexes every `NOTE#` item where `indexedHash != contentHash`. This is for notes created before phase 2.
+
+### Chunking (indexer)
+1. Strip the frontmatter.
+2. Split on Markdown headings (`#`–`######`, outside code fences). Each chunk's `heading` is its heading path joined with ` > `, e.g. `Design > Storage`. Text before the first heading uses the note title.
+3. Merge sections under about 200 characters into the next section.
+4. Split sections over about 2,800 characters (roughly 700 tokens) on blank lines, then hard-wrap. Consecutive pieces overlap by about 300 characters.
+5. Embed `"<title>\n<heading>\n\n<chunk text>"` so short chunks keep their context.
+
+An empty note gives 0 chunks: no vectors, but `indexedHash` is still written.
+
+### Embeddings
+- **Model:** Bedrock `InvokeModel`, model `amazon.titan-embed-text-v2:0`.
+- **Request body:** `{"inputText": "...", "dimensions": 1024, "normalize": true}`.
+- **Response:** read `embedding` (float32 × 1024).
+- **Length cap:** input is capped at 30,000 characters.
+
+### Vectors (S3 Vectors)
+- **Location:** vector bucket `VECTOR_BUCKET`, index `VECTOR_INDEX`. The index is `float32`, dimension 1024, `cosine`.
+- **Key:** `<sub>#<path>#<n>`.
+- **Filterable metadata:** `sub` (string), `path` (string), `project` (string, omitted when `null`).
+- **Non-filterable metadata:** `heading` (string), `snippet` (string: the first about 300 characters of the chunk text with whitespace collapsed), `title` (string), `updatedAt` (string).
+
+### `GET /api/search?q=<text>&project=<name>&limit=<n>`
+- **Parameters:**
+  - `q` is required: 1–500 characters after trimming, otherwise `400`.
+  - `project` is optional, an exact match.
+  - `limit` is optional: 1–50, default 10, otherwise `400`.
+- **Steps:**
+  1. Embed `q` with the model and settings above.
+  2. Call `QueryVectors(topK = 30, filter, returnMetadata = true, returnDistance = true)`. The filter is `{"sub": {"$eq": <caller sub>}}`, and with `project` it becomes `{"$and": [<sub filter>, {"project": {"$eq": project}}]}`. **The `sub` condition is built server-side in exactly one function and never comes from the request.**
+  3. Group the results by `path`. Each note keeps its best chunk, with `score = 1 - distance` for cosine.
+  4. Name matches: from the caller's notes list (one metadata `Query`), take every note whose title or path contains `q`, case-insensitively, and that passes the `project` filter. These rank **first**, title matches before path-only matches, each group by `updatedAt` descending.
+  5. Merge the two lists, deduplicating by path: a note that's in both appears once, at the name-match position, with its semantic snippet. Drop semantic hits with no metadata (deleted or in flight). Trim to `limit`.
+- **Response:** `200` with
+```json
+[{ "path": "Projects/Hades/Design.md", "title": "Design", "project": "hades",
+   "updatedAt": "…", "match": "semantic",
+   "score": 0.83, "heading": "Design > Storage", "snippet": "Content lives in S3…" }]
+```
+  - `match` is `"name"` or `"semantic"`.
+  - `score`, `heading` and `snippet` are `null` for a name match with no semantic hit.
+  - For a name match, `snippet` falls back to `null`. The client shows the path instead.
+
 ## Errors
 All errors are JSON: `{ "error": "message" }` with status 400, 401, 404, 409 or 500. A `409` from the notes routes also includes `currentHash` when the note exists.
 
@@ -145,6 +211,9 @@ All errors are JSON: `{ "error": "message" }` with status 400, 401, 404, 409 or 
 |---|---|---|
 | `TABLE_NAME` | yes | |
 | `NOTES_BUCKET` | yes | |
+| `VECTOR_BUCKET` | yes (API and indexer) | |
+| `VECTOR_INDEX` | yes (API and indexer) | |
+| `EMBED_MODEL_ID` | no | `amazon.titan-embed-text-v2:0` |
 | `COGNITO_USER_POOL_ID` | yes | |
 | `COGNITO_CLIENT_ID` | yes | |
 | `AWS_REGION` | no | `us-west-2` |
