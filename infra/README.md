@@ -129,6 +129,19 @@ cp public/config.example.json public/config.json
 npm run dev
 ```
 
+## Cost tracking
+
+Every taggable resource in the stack is tagged `application=hades` (set once in `bin/hades.ts`). This includes the Lambda log groups, which the stack defines itself with 30-day retention.
+
+To see costs by this tag in Cost Explorer and billing reports:
+1. Deploy once, so the tag exists.
+2. In the Billing console, open **Cost allocation tags**, select `application` and **Activate** it. It can take up to 24 hours to appear, and costs are only attributed from activation onward.
+
+**Not covered by the tag:**
+- **Bedrock** on-demand model calls (the Titan embeddings): these show under Bedrock without the tag. That's cents per month at personal scale.
+- **Untaggable resources:** routes, policies, permissions and similar. These have no cost of their own.
+- **Lambda's old auto-created log group:** if you deployed before this change, Lambda's original `/aws/lambda/<function>` log group remains, untagged and with no retention. Delete it by hand.
+
 ## Notes
 
 - The table, user pool, notes bucket, vector bucket and vector index use `RemovalPolicy.RETAIN`, so `cdk destroy` leaves them in place. The notes bucket is the source of truth for note content and is never emptied by CDK. Delete it by hand (including all object versions) if you really want it gone. The site bucket is destroyed and emptied.

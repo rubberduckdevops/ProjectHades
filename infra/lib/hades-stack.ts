@@ -12,6 +12,7 @@ import {
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -106,9 +107,17 @@ export class HadesStack extends Stack {
     const embedModelArn = `arn:${this.partition}:bedrock:${this.region}::foundation-model/${embedModelId}`;
 
     // ---- Lambda (Rust / Axum) -------------------------------------------
+    // Log groups are defined here (rather than auto-created by Lambda on first run) so they
+    // carry the stack's cost-allocation tag and don't keep logs forever. CDK-generated names
+    // avoid clashing with any /aws/lambda/<fn> group Lambda already created.
+    const apiLogs = new logs.LogGroup(this, 'ApiFunctionLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
     const fn = new RustFunction(this, 'ApiFunction', {
       manifestPath: path.join(__dirname, '../../backend/Cargo.toml'),
       binaryName: 'backend',
+      logGroup: apiLogs,
       architecture: lambda.Architecture.ARM_64,
       memorySize: 256,
       timeout: Duration.seconds(10),
@@ -156,9 +165,14 @@ export class HadesStack extends Stack {
       enforceSSL: true,
     });
 
+    const indexerLogs = new logs.LogGroup(this, 'IndexerFunctionLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
     const indexer = new RustFunction(this, 'IndexerFunction', {
       manifestPath: path.join(__dirname, '../../backend/Cargo.toml'),
       binaryName: 'indexer',
+      logGroup: indexerLogs,
       architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
       // Generous for the one-off {"backfill": true} invoke, which reindexes sequentially;

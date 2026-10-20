@@ -4,6 +4,10 @@ import { HadesStack } from '../lib/hades-stack';
 
 const app = new cdk.App();
 
+// Cost-allocation tag on every taggable resource in the app (and the stack itself).
+// Activate "application" under Billing → Cost allocation tags to see it in Cost Explorer.
+cdk.Tags.of(app).add('application', 'hades');
+
 new HadesStack(app, 'HadesStack', {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
