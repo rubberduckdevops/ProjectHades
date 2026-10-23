@@ -17,7 +17,7 @@ import StatusIndicator from '@cloudscape-design/components/status-indicator'
 import Table, { type TableProps } from '@cloudscape-design/components/table'
 import { createTodo, deleteTodo, listTodos, updateTodo, type Todo, type TodoPatch } from '../api/todos'
 import { calendarDate, formatDateTime } from '../lib/dates'
-import { absorbProjects, loadRecentProjects, rememberProject } from '../lib/projects'
+import { useProjects } from '../lib/useProjects'
 import { dueStatus, formatDue, sortDone, sortOpen, upsertTodo } from '../lib/todos'
 import { useSettings } from '../settings-store'
 
@@ -63,7 +63,6 @@ export default function TodosPage() {
   const [due, setDue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const titleRef = useRef<InputProps.Ref>(null)
-  const [recentProjects, setRecentProjects] = useState(loadRecentProjects)
   const [projectFilter, setProjectFilter] = useState<SelectProps.Option>(ALL_PROJECTS)
 
   const [mountedAt] = useState(() => new Date())
@@ -85,13 +84,15 @@ export default function TodosPage() {
     ])
   }, [])
 
+  const onProjectsError = useCallback((err: unknown) => pushError('Failed to load projects', err), [pushError])
+  const { projects: recentProjects, remember: rememberProject } = useProjects(onProjectsError)
+
   const load = useCallback(
     (isCancelled: () => boolean = () => false) =>
       listTodos()
         .then((result) => {
           if (isCancelled()) return
           setTodos(result)
-          setRecentProjects(absorbProjects(projectsIn(result)))
         })
         .catch((err: unknown) => {
           if (!isCancelled()) pushError('Failed to load todos', err)
@@ -129,7 +130,7 @@ export default function TodosPage() {
     try {
       const updated = await updateTodo(todo.id, changes)
       setTodos((prev) => upsertTodo(prev, updated))
-      if (updated.project) setRecentProjects(rememberProject(updated.project))
+      if (updated.project) rememberProject(updated.project)
       return true
     } catch (err) {
       pushError(failure, err)
@@ -165,7 +166,7 @@ export default function TodosPage() {
         due: due || undefined,
       })
       setTodos((prev) => upsertTodo(prev, todo))
-      if (todo.project) setRecentProjects(rememberProject(todo.project))
+      if (todo.project) rememberProject(todo.project)
       setTitle('')
       setDue('')
       // Keep the project: adding several tasks for one project in a row is common.
@@ -359,7 +360,7 @@ export default function TodosPage() {
                 options={projectOptions}
                 enteredTextLabel={(value) => `Use "${value}"`}
                 placeholder="None"
-                empty="No recent projects"
+                empty="No projects yet"
                 disabled={submitting}
                 ariaLabel="Project"
               />

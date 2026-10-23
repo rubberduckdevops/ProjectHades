@@ -153,3 +153,11 @@ where
 {
     Option::<T>::deserialize(d).map(Some)
 }
+
+/// A registered project name, as returned by `GET /api/projects`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub name: String,
+    pub last_used_at: String,
+}

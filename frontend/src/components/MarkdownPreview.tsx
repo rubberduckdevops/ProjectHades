@@ -14,6 +14,7 @@ import {
   spaceScaledXxs,
 } from '@cloudscape-design/design-tokens'
 import Markdown, { type Components } from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 
 const cell: CSSProperties = {
@@ -90,14 +91,33 @@ const components: Components = {
   img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} style={{ maxWidth: '100%' }} />,
 }
 
+// For short text in a table cell: no gap above the first paragraph or below the last.
+const tight: CSSProperties = { marginBlock: `0 ${spaceScaledXxs}` }
+const compactComponents: Components = {
+  ...components,
+  p: ({ children }) => <p style={tight}>{children}</p>,
+}
+
+interface MarkdownPreviewProps {
+  content: string
+  /**
+   * Journal-style rendering: a single newline is a line break (as typed, not as Markdown
+   * would join it) and paragraphs sit tight, for use inside a table cell.
+   */
+  compact?: boolean
+}
+
 /** GitHub-flavored Markdown preview. Raw HTML is shown escaped as text, never rendered (no rehype-raw). */
-export default function MarkdownPreview({ content }: { content: string }) {
+export default function MarkdownPreview({ content, compact = false }: MarkdownPreviewProps) {
   if (!content.trim()) {
     return <Box color="text-status-inactive">Nothing to preview</Box>
   }
   return (
     <TextContent>
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown
+        remarkPlugins={compact ? [remarkGfm, remarkBreaks] : [remarkGfm]}
+        components={compact ? compactComponents : components}
+      >
         {content}
       </Markdown>
     </TextContent>

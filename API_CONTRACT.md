@@ -9,7 +9,7 @@ Shared by `backend/` (Rust/Axum on Lambda), `frontend/` (React + Cloudscape) and
 - `GET /api/health` is unauthenticated and returns `200 "ok"`.
 
 ## Auth
-- Every route except `/api/health` (journal, notes, search and todos) requires `Authorization: Bearer <Cognito ACCESS token>`.
+- Every route except `/api/health` (journal, notes, search, todos and projects) requires `Authorization: Bearer <Cognito ACCESS token>`.
 - The backend validates the token against the user pool's JWKS. It checks for RS256, `iss = https://cognito-idp.{region}.amazonaws.com/{userPoolId}`, `exp`, `token_use == "access"` and `client_id == COGNITO_CLIENT_ID`.
 - The userId is the token's `sub`.
 - A missing or invalid token gets `401 {"error": "..."}`.
@@ -32,7 +32,7 @@ Shared by `backend/` (Rust/Axum on Lambda), `frontend/` (React + Cloudscape) and
 - Returns `200 [entry, ...]`, sorted by timestamp ascending.
 - `from` and `to` are optional RFC 3339 strings. They default to the start and end of the current UTC day.
 - Both bounds are inclusive. The backend normalizes them to the `sk` format before querying.
-- The frontend sends the user's *local* midnight-to-midnight range converted to UTC ISO, e.g. `new Date(y,m,d).toISOString()`.
+- The frontend sends the user's *local* midnight-to-midnight range converted to UTC ISO, e.g. `new Date(y,m,d).toISOString()`. It shows one day at a time, today by default, and `/journal?date=YYYY-MM-DD` opens a past day.
 - An invalid bound gets `400`.
 
 ### `GET /api/journal/{timestamp}`
@@ -241,6 +241,31 @@ Body: any of `{ "title": "...", "project": "..." | null, "due": "YYYY-MM-DD" | n
 
 #### `DELETE /api/todos/{id}`
 Returns `204`, or `404` if the todo doesn't exist.
+
+## Projects
+The free-text `project` used by journal entries, todos and notes, collected into one list per user so the same names are suggested everywhere and every day.
+
+### Storage
+Items live in the existing table under `pk = PROJECT#<sub>`:
+- `sk = NAME#<lowercased name>`: `name` (S, the spelling last used) and `lastUsedAt` (S, the journal's `sk` format). Names are case-insensitive: `Hades` and `hades` are one project.
+- `sk = META#backfill`: a marker, written once the registry has been seeded from existing data.
+
+### Recording uses
+These calls record their project (set `name`, `lastUsedAt = now`) after their own write succeeds:
+- `PUT /api/journal` with a project;
+- `POST /api/todos` with a project, and `PATCH /api/todos/{id}` that sets one;
+- `PUT /api/notes/{path...}` whose frontmatter has a project of at most 100 bytes.
+
+This is best-effort: if it fails, the error is logged and the request still succeeds.
+
+### Endpoints
+#### `GET /api/projects`
+Returns `200 [{ "name": "hades", "lastUsedAt": "2026-10-22T09:15:00.000Z" }]`, most recently used first.
+
+The first call for a user (no `META#backfill` marker) seeds the registry. It reads every journal entry, todo and note, and records each project with its latest use: the entry's timestamp, or the todo's or note's `updatedAt`. A later use that's already recorded is kept. Then it writes the marker.
+
+#### `DELETE /api/projects/{name}`
+`name` is percent-encoded and matched case-insensitively. Returns `204`, `404` if it isn't registered, or `400` if it's blank or over 100 bytes. Only the registry item goes: entries, todos and notes keep the name, and using it again registers it again. The backfill never runs twice, so it won't bring the name back.
 
 ## Errors
 All errors are JSON: `{ "error": "message" }` with status 400, 401, 404, 409 or 500. A `409` from the notes routes also includes `currentHash` when the note exists.

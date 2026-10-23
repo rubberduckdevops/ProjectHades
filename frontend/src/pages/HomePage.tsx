@@ -10,7 +10,7 @@ import { applications } from '../applications'
 
 /** One-line pitches for each app, keyed by route. Unknown apps just show their name. */
 const APP_BLURBS: Record<string, string> = {
-  '/journal': 'A quick, timestamped log of your day. Tag entries with a project, then copy the day out as Markdown.',
+  '/journal': 'A quick, timestamped log of your day. Tag entries with a project, browse back through earlier days, and copy any day out as Markdown.',
   '/notes': 'Longer-lived Markdown notes in folders, with edit history and search that understands what you meant.',
   '/todos': 'A short list of things to do, with optional projects and due dates. Tick them off as you go.',
 }

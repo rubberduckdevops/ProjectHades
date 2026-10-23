@@ -75,19 +75,39 @@ function zonedMidnight(year: number, month: number, day: number, timeZone: strin
   return new Date(guess)
 }
 
+const pad = (n: number) => String(n).padStart(2, '0')
+
+/** Whether `s` is a real calendar date written as `YYYY-MM-DD`. */
+export function isCalendarDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return false
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3])
+}
+
+/** The calendar day `n` days after `day` (both `YYYY-MM-DD`; `n` may be negative). */
+export function addDays(day: string, n: number): string {
+  const [y, m, d] = day.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d + n))
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+}
+
+/** Midnight to 23:59:59.999 of calendar day `day` (`YYYY-MM-DD`) in `timeZone`, as UTC ISO strings. */
+export function dayRange(day: string, timeZone: string = browserTimeZone()): DateRange {
+  const [year, month, date] = day.split('-').map(Number)
+  const next = addDays(day, 1).split('-').map(Number)
+  const start = zonedMidnight(year, month, date, timeZone)
+  const end = zonedMidnight(next[0], next[1], next[2], timeZone)
+  return { from: start.toISOString(), to: new Date(end.getTime() - 1).toISOString() }
+}
+
 /**
  * Midnight to 23:59:59.999 of `now`'s calendar day in `timeZone`
  * (defaults to the browser's), as UTC ISO strings.
  */
 export function todayRange(now: Date = new Date(), timeZone: string = browserTimeZone()): DateRange {
-  const { year, month, day } = zonedParts(now, timeZone)
-  const start = zonedMidnight(year, month, day, timeZone)
-  const next = new Date(Date.UTC(year, month - 1, day + 1))
-  const end = zonedMidnight(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), timeZone)
-  return { from: start.toISOString(), to: new Date(end.getTime() - 1).toISOString() }
+  return dayRange(calendarDate(now, timeZone), timeZone)
 }
-
-const pad = (n: number) => String(n).padStart(2, '0')
 
 /** `now`'s calendar day in `timeZone` as `YYYY-MM-DD`. */
 export function calendarDate(now: Date = new Date(), timeZone: string = browserTimeZone()): string {

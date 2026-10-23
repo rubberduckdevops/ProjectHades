@@ -8,6 +8,7 @@ import RadioGroup from '@cloudscape-design/components/radio-group'
 import Select, { type SelectProps } from '@cloudscape-design/components/select'
 import SpaceBetween from '@cloudscape-design/components/space-between'
 import ApiTokenSection from '../components/ApiTokenSection'
+import ProjectsSection from '../components/ProjectsSection'
 import { browserTimeZone, formatTime, supportedTimeZones } from '../lib/dates'
 import type { ThemePreference } from '../lib/settings'
 import { useSettings } from '../settings-store'
@@ -32,7 +33,7 @@ export default function SettingsPage() {
   return (
     <ContentLayout
       header={
-        <Header variant="h1" description="Appearance and time settings are saved in this browser.">
+        <Header variant="h1" description="Appearance and time settings are saved in this browser; projects are saved to your account.">
           Profile settings
         </Header>
       }
@@ -74,6 +75,7 @@ export default function SettingsPage() {
             />
           </FormField>
         </Container>
+        <ProjectsSection />
         <ApiTokenSection />
       </SpaceBetween>
     </ContentLayout>

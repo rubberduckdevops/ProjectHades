@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calendarDate, formatDateTime, formatTime, todayRange } from './dates'
+import { addDays, calendarDate, dayRange, formatDateTime, formatTime, isCalendarDate, todayRange } from './dates'
 
 describe('todayRange', () => {
   it('returns from < to as ISO strings', () => {
@@ -93,5 +93,35 @@ describe('calendarDate', () => {
     expect(calendarDate(now, 'UTC')).toBe('2026-10-19')
     expect(calendarDate(now, 'America/Los_Angeles')).toBe('2026-10-18')
     expect(calendarDate(new Date('2026-01-05T12:00:00.000Z'), 'UTC')).toBe('2026-01-05')
+  })
+})
+
+describe('calendar days', () => {
+  it('validates YYYY-MM-DD', () => {
+    expect(isCalendarDate('2028-02-29')).toBe(true)
+    for (const bad of ['2026-02-30', '2026-1-5', '', 'yesterday', '2026-10-23T00:00:00Z']) {
+      expect(isCalendarDate(bad)).toBe(false)
+    }
+  })
+
+  it('adds days across month and year ends', () => {
+    expect(addDays('2026-10-23', -1)).toBe('2026-10-22')
+    expect(addDays('2026-03-01', -1)).toBe('2026-02-28')
+    expect(addDays('2026-12-31', 1)).toBe('2027-01-01')
+  })
+
+  it('spans a day in the given timezone, including DST changes', () => {
+    expect(dayRange('2026-10-22', 'America/Los_Angeles')).toEqual({
+      from: '2026-10-22T07:00:00.000Z',
+      to: '2026-10-23T06:59:59.999Z',
+    })
+    // Clocks go back on Nov 1: a 25-hour day.
+    expect(dayRange('2026-11-01', 'America/Los_Angeles')).toEqual({
+      from: '2026-11-01T07:00:00.000Z',
+      to: '2026-11-02T07:59:59.999Z',
+    })
+    expect(todayRange(new Date('2026-10-23T05:00:00Z'), 'America/Los_Angeles')).toEqual(
+      dayRange('2026-10-22', 'America/Los_Angeles'),
+    )
   })
 })

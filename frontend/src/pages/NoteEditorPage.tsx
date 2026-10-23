@@ -98,10 +98,12 @@ interface BodyEditorProps {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  /** The tab shown first: saved notes open for reading, new ones for writing. */
+  initialTab?: 'edit' | 'preview'
 }
 
-function NoteBodyEditor({ value, onChange, disabled }: BodyEditorProps) {
-  const [tab, setTab] = useState('edit')
+function NoteBodyEditor({ value, onChange, disabled, initialTab = 'edit' }: BodyEditorProps) {
+  const [tab, setTab] = useState<string>(initialTab)
   return (
     <Tabs
       activeTabId={tab}
@@ -655,7 +657,7 @@ function ExistingNoteEditor({ path }: { path: string }) {
           />
         </Container>
         <Container>
-          <NoteBodyEditor value={content} onChange={setContent} />
+          <NoteBodyEditor value={content} onChange={setContent} initialTab="preview" />
         </Container>
       </SpaceBetween>
 

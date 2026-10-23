@@ -1,7 +1,8 @@
+// The server keeps the project list (GET /api/projects). This browser keeps a copy so
+// suggestions are there before the request finishes, or if it fails.
 const STORAGE_KEY = 'hades.recentProjects'
-export const MAX_RECENT_PROJECTS = 20
 
-/** Most-recent-first, case-insensitively unique, capped. */
+/** Most-recent-first, case-insensitively unique. */
 export function mergeProjects(front: string[], rest: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
@@ -11,13 +12,17 @@ export function mergeProjects(front: string[], rest: string[]): string[] {
     if (!name || seen.has(key)) continue
     seen.add(key)
     out.push(name)
-    if (out.length === MAX_RECENT_PROJECTS) break
   }
   return out
 }
 
-/** Recently used project names, most recent first. Empty on any storage problem. */
-export function loadRecentProjects(): string[] {
+/** `projects` with `name` moved to the front. */
+export function rememberProject(projects: string[], name: string): string[] {
+  return mergeProjects([name], projects)
+}
+
+/** The cached project list. Empty on any storage problem. */
+export function loadCachedProjects(): string[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
     if (!Array.isArray(parsed)) return []
@@ -30,25 +35,10 @@ export function loadRecentProjects(): string[] {
   }
 }
 
-function save(projects: string[]): void {
+export function saveCachedProjects(projects: string[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
   } catch {
-    // Storage unavailable: suggestions just won't persist.
+    // Storage unavailable: the list just loads from the server each time.
   }
-}
-
-/** Move `name` to the front of the recent list. Returns the new list. */
-export function rememberProject(name: string): string[] {
-  const next = mergeProjects([name], loadRecentProjects())
-  save(next)
-  return next
-}
-
-/** Add names seen elsewhere (e.g. loaded entries) after the existing ones. Returns the new list. */
-export function absorbProjects(names: string[]): string[] {
-  const current = loadRecentProjects()
-  const next = mergeProjects(current, names)
-  if (next.length !== current.length) save(next)
-  return next
 }

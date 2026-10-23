@@ -11,7 +11,10 @@ use std::sync::Arc;
 
 use aws_sdk_dynamodb::{
     config::{BehaviorVersion, Credentials, Region},
-    types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType},
+    types::{
+        AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
+        ScalarAttributeType,
+    },
 };
 use aws_sdk_s3::types::{BucketVersioningStatus, VersioningConfiguration};
 use axum::{
@@ -538,6 +541,90 @@ async fn e2e_todos_lifecycle() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (_, list) = call(app, u, "GET", "/api/todos", None).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[ignore = "needs HADES_E2E_ENDPOINT (local S3/DynamoDB mock)"]
+async fn e2e_projects_registry() {
+    let env = setup().await;
+    let app = &env.app;
+    let u = "user-1";
+    let names = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // Data written before the registry existed: put it straight into the table.
+    for (pk, sk, project, at) in [
+        ("JOURNAL#user-1", "2026-09-01T10:00:00.000Z", "hades", None),
+        ("JOURNAL#user-1", "2026-09-03T10:00:00.000Z", "Hades", None),
+        (
+            "TODO#user-1",
+            "2026-09-02T10:00:00.000Z",
+            "home",
+            Some("2026-09-02T10:00:00.000Z"),
+        ),
+        (
+            "NOTE#user-1",
+            "Garden.md",
+            "garden",
+            Some("2026-08-01T10:00:00.000Z"),
+        ),
+        ("JOURNAL#user-2", "2026-09-05T10:00:00.000Z", "secret", None),
+    ] {
+        let mut req = env
+            .ddb
+            .put_item()
+            .table_name(&env.table)
+            .item("pk", AttributeValue::S(pk.into()))
+            .item("sk", AttributeValue::S(sk.into()))
+            .item("project", AttributeValue::S(project.into()));
+        if let Some(at) = at {
+            req = req.item("updatedAt", AttributeValue::S(at.into()));
+        }
+        req.send().await.unwrap();
+    }
+
+    // The first list seeds from history, latest spelling winning, newest first.
+    let (s, list) = call(app, u, "GET", "/api/projects", None).await;
+    assert_eq!(s, StatusCode::OK, "{list}");
+    assert_eq!(names(&list), ["Hades", "home", "garden"]);
+    assert_eq!(list[0]["lastUsedAt"], "2026-09-03T10:00:00.000Z");
+
+    // New writes register their project and move it to the front.
+    call(
+        app,
+        u,
+        "PUT",
+        "/api/journal",
+        Some(json!({ "body": "x", "project": "work" })),
+    )
+    .await;
+    call(
+        app,
+        u,
+        "POST",
+        "/api/todos",
+        Some(json!({ "title": "t", "project": "garden" })),
+    )
+    .await;
+    let (_, list) = call(app, u, "GET", "/api/projects", None).await;
+    assert_eq!(names(&list), ["garden", "work", "Hades", "home"]);
+
+    // Deleting removes it for good; the backfill doesn't bring it back.
+    let (s, _) = call(app, u, "DELETE", "/api/projects/HADES", None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(app, u, "DELETE", "/api/projects/hades", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (_, list) = call(app, u, "GET", "/api/projects", None).await;
+    assert_eq!(names(&list), ["garden", "work", "home"]);
+
+    // Other users don't see these.
+    let (_, other) = call(app, "user-2", "GET", "/api/projects", None).await;
+    assert_eq!(names(&other), ["secret"]);
 }
 
 async fn count_versions(env: &Env) -> usize {

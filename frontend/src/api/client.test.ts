@@ -12,6 +12,7 @@ vi.mock('../config', () => ({
 
 import { ApiError, request } from './client'
 import { createNote, deleteNote, getNote, listNotes, moveNote, searchNotes, searchUrl, updateNote } from './notes'
+import { deleteProject, listProjects } from './projects'
 import { createTodo, deleteTodo, listTodos, updateTodo } from './todos'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -177,6 +178,18 @@ describe('todos API', () => {
   it('deletes by id', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
     await expect(deleteTodo(id)).resolves.toBeUndefined()
+    expect(lastCall().init.method).toBe('DELETE')
+  })
+})
+
+describe('projects API', () => {
+  it('lists and deletes by encoded name', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, []))
+    await listProjects()
+    expect(lastCall().url).toBe('https://api.test/api/projects')
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await expect(deleteProject('Home / garden')).resolves.toBeUndefined()
+    expect(lastCall().url).toBe('https://api.test/api/projects/Home%20%2F%20garden')
     expect(lastCall().init.method).toBe('DELETE')
   })
 })

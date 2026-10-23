@@ -493,6 +493,38 @@ async fn todo_valid_requests_reach_dynamodb() {
     }
 }
 
+// ---- Projects ------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn projects_require_token() {
+    for req in [
+        todo_req("GET", "/api/projects", None, None),
+        todo_req("DELETE", "/api/projects/hades", None, None),
+    ] {
+        assert_eq!(send(req).await.0, StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
+async fn project_delete_validation_is_400() {
+    let long = format!("/api/projects/{}", "p".repeat(101));
+    for uri in ["/api/projects/%20%20", long.as_str()] {
+        let (status, _, _) = send(todo_req("DELETE", uri, None, Some(bearer()))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri:.40}");
+    }
+}
+
+#[tokio::test]
+async fn project_valid_requests_reach_dynamodb() {
+    for (method, uri) in [
+        ("GET", "/api/projects"),
+        ("DELETE", "/api/projects/My%20Project"),
+    ] {
+        let (status, _, _) = send(todo_req(method, uri, None, Some(bearer()))).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {uri}");
+    }
+}
+
 // ---- Search --------------------------------------------------------------------------------
 
 mod search {

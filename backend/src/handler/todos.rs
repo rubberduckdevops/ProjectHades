@@ -15,6 +15,7 @@ use crate::{
     models::{CreateTodo, PatchTodo, Todo},
     repo::{
         journal::normalize_timestamp,
+        projects::ProjectRepo,
         todos::{TodoRepo, TodoUpdate},
     },
 };
@@ -90,6 +91,9 @@ pub async fn create_todo(
     let todo = TodoRepo::new(&state.ddb, &state.table_name)
         .create(&user.sub, &title, project.as_deref(), due.as_deref())
         .await?;
+    ProjectRepo::new(&state.ddb, &state.table_name)
+        .touch_quietly(&user.sub, todo.project.as_deref())
+        .await;
     Ok((StatusCode::CREATED, Json(todo)))
 }
 
@@ -103,11 +107,17 @@ pub async fn patch_todo(
     let id = id_or_400(&id)?;
     let Json(input) = input.map_err(|e| ApiError::bad_request(e.body_text()))?;
     let update = validate_patch(input)?;
-    TodoRepo::new(&state.ddb, &state.table_name)
+    let todo = TodoRepo::new(&state.ddb, &state.table_name)
         .update(&user.sub, &id, &update)
         .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("not found"))
+        .ok_or_else(|| ApiError::not_found("not found"))?;
+    // Only a patch that sets the project counts as using it.
+    if let Some(Some(project)) = &update.project {
+        ProjectRepo::new(&state.ddb, &state.table_name)
+            .touch_quietly(&user.sub, Some(project))
+            .await;
+    }
+    Ok(Json(todo))
 }
 
 /// `DELETE /api/todos/{id}`

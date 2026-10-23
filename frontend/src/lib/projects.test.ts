@@ -6,41 +6,30 @@ vi.stubGlobal('localStorage', {
   setItem: (k: string, v: string) => void store.set(k, v),
 })
 
-const { MAX_RECENT_PROJECTS, absorbProjects, loadRecentProjects, rememberProject } = await import('./projects')
+const { loadCachedProjects, mergeProjects, rememberProject, saveCachedProjects } = await import('./projects')
 
-describe('recent projects', () => {
+describe('projects', () => {
   beforeEach(() => store.clear())
 
-  it('starts empty', () => {
-    expect(loadRecentProjects()).toEqual([])
-  })
-
-  it('remembers most recent first and dedupes case-insensitively', () => {
-    rememberProject('hades')
-    rememberProject('Home')
-    expect(rememberProject(' HADES ')).toEqual(['HADES', 'Home'])
+  it('moves a used name to the front and dedupes case-insensitively', () => {
+    expect(rememberProject(['Home', 'hades'], ' HADES ')).toEqual(['HADES', 'Home'])
   })
 
   it('ignores blank names', () => {
-    expect(rememberProject('   ')).toEqual([])
+    expect(rememberProject(['a'], '   ')).toEqual(['a'])
+    expect(mergeProjects(['', ' '], ['b'])).toEqual(['b'])
   })
 
-  it('caps the list', () => {
-    for (let i = 0; i < MAX_RECENT_PROJECTS + 5; i++) rememberProject(`p${i}`)
-    const list = loadRecentProjects()
-    expect(list).toHaveLength(MAX_RECENT_PROJECTS)
-    expect(list[0]).toBe(`p${MAX_RECENT_PROJECTS + 4}`)
-  })
-
-  it('absorbs names after existing ones', () => {
-    rememberProject('hades')
-    expect(absorbProjects(['work', 'Hades'])).toEqual(['hades', 'work'])
+  it('caches the list', () => {
+    expect(loadCachedProjects()).toEqual([])
+    saveCachedProjects(['hades', 'work'])
+    expect(loadCachedProjects()).toEqual(['hades', 'work'])
   })
 
   it('survives junk in storage', () => {
     store.set('hades.recentProjects', '{bad')
-    expect(loadRecentProjects()).toEqual([])
+    expect(loadCachedProjects()).toEqual([])
     store.set('hades.recentProjects', JSON.stringify(['ok', 3, null]))
-    expect(loadRecentProjects()).toEqual(['ok'])
+    expect(loadCachedProjects()).toEqual(['ok'])
   })
 })

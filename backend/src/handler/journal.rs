@@ -15,7 +15,10 @@ use crate::{
     auth::AuthUser,
     error::ApiError,
     models::{CreateOrUpdateJournalEntry, JournalEntry, ListQuery},
-    repo::journal::{JournalRepo, format_sk, normalize_timestamp, utc_day_range},
+    repo::{
+        journal::{JournalRepo, format_sk, normalize_timestamp, utc_day_range},
+        projects::ProjectRepo,
+    },
 };
 
 /// Maximum entry body size in bytes (10 KB).
@@ -119,12 +122,12 @@ pub async fn put_journal_entry(
         .transpose()?;
 
     let repo = JournalRepo::new(&state.ddb, &state.table_name);
-    match sk {
+    let (status, entry) = match sk {
         None => {
             let entry = repo
                 .put_new(&user.sub, project.as_deref(), &input.body)
                 .await?;
-            Ok((StatusCode::CREATED, Json(entry)))
+            (StatusCode::CREATED, entry)
         }
         Some(sk) => {
             let (entry, created) = repo
@@ -135,9 +138,13 @@ pub async fn put_journal_entry(
             } else {
                 StatusCode::OK
             };
-            Ok((status, Json(entry)))
+            (status, entry)
         }
-    }
+    };
+    ProjectRepo::new(&state.ddb, &state.table_name)
+        .touch_quietly(&user.sub, entry.project.as_deref())
+        .await;
+    Ok((status, Json(entry)))
 }
 
 #[cfg(test)]

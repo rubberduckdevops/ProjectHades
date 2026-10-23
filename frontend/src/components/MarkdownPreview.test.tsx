@@ -28,4 +28,14 @@ describe('MarkdownPreview', () => {
   it('renders fenced code blocks', () => {
     expect(render('```ts\nconst a = 1\n```')).toMatch(/<pre[^>]*><code class="language-ts"/)
   })
+
+  it('keeps single newlines as line breaks only in compact mode', () => {
+    const compact = renderToStaticMarkup(<MarkdownPreview content={'one\ntwo'} compact />)
+    expect(compact).toContain('<br/>')
+    expect(render('one\ntwo')).not.toContain('<br/>')
+  })
+
+  it('links bare URLs', () => {
+    expect(render('see https://example.com')).toContain('href="https://example.com"')
+  })
 })

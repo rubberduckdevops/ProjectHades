@@ -13,9 +13,10 @@ use crate::{
     AppState,
     auth::AuthUser,
     error::ApiError,
+    handler::journal::normalize_project,
     models::{DeleteNoteQuery, ListNotesQuery, MoveNoteRequest, Note, NoteMeta, PutNoteRequest},
     notes::{MAX_CONTENT_BYTES, MAX_PATH_BYTES, is_valid_hash, validate_path},
-    repo::notes::NotesRepo,
+    repo::{notes::NotesRepo, projects::ProjectRepo},
 };
 
 /// Request body limit for `PUT /api/notes/{path}`. Content is capped at 1 MB, but JSON
@@ -103,16 +104,22 @@ pub async fn put_note(
     let base = input.base_hash.as_deref().map(base_hash).transpose()?;
 
     let repo = repo(&state);
-    match base {
-        None => {
-            let meta = repo.create(&user.sub, &path, &input.content).await?;
-            Ok((StatusCode::CREATED, Json(meta)))
-        }
-        Some(base) => {
-            let meta = repo.update(&user.sub, &path, &input.content, &base).await?;
-            Ok((StatusCode::OK, Json(meta)))
-        }
-    }
+    let (status, meta) = match base {
+        None => (
+            StatusCode::CREATED,
+            repo.create(&user.sub, &path, &input.content).await?,
+        ),
+        Some(base) => (
+            StatusCode::OK,
+            repo.update(&user.sub, &path, &input.content, &base).await?,
+        ),
+    };
+    // Frontmatter isn't length-checked, so an over-long project just isn't registered.
+    let project = normalize_project(meta.project.clone()).ok().flatten();
+    ProjectRepo::new(&state.ddb, &state.table_name)
+        .touch_quietly(&user.sub, project.as_deref())
+        .await;
+    Ok((status, Json(meta)))
 }
 
 /// `DELETE /api/notes/{path...}?baseHash=`
